@@ -46,6 +46,13 @@ class Settings(BaseSettings):
     cmc_api_endpoint: Optional[str] = None
     cmc_api_key: Optional[str] = None
 
+    # 免费 API 预算保护（默认按 free/demo 10k 月度、30 rpm 做保守预留）
+    provider_usage_file: str = "data/provider_usage.json"
+    coingecko_monthly_soft_limit: int = 9500
+    coingecko_minute_soft_limit: int = 25
+    cmc_monthly_soft_limit: int = 9500
+    cmc_minute_soft_limit: int = 25
+
     # 缓存 TTL（秒）
     cache_ttl_ticker: int = 5
     cache_ttl_oi: int = 30

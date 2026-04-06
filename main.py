@@ -32,6 +32,7 @@ from cmc_collector import CMCCollector
 from coin_analyzer import CoinAnalyzer, CoinAnalysis, Direction
 from cache import APICache, init_cache, get_cache
 from cache_warmer import CacheWarmer
+from nofx_mapping import build_mapping_summary
 
 # 配置日志
 logging.basicConfig(
@@ -75,6 +76,11 @@ async def lifespan(app: FastAPI):
         coingecko_api_endpoint=settings.coingecko_api_endpoint,
         coingecko_api_key=settings.coingecko_api_key,
         provider=settings.market_data_provider,
+        usage_storage_path=settings.provider_usage_file,
+        coingecko_monthly_soft_limit=settings.coingecko_monthly_soft_limit,
+        coingecko_minute_soft_limit=settings.coingecko_minute_soft_limit,
+        cmc_monthly_soft_limit=settings.cmc_monthly_soft_limit,
+        cmc_minute_soft_limit=settings.cmc_minute_soft_limit,
     )
     if cmc_collector.is_available:
         logger.info(f"✓ 宏观数据源已配置: {cmc_collector.active_provider}")
@@ -218,6 +224,11 @@ def verify_auth(auth: str) -> bool:
     return auth == settings.auth_key
 
 
+def normalize_symbol(symbol: str) -> str:
+    symbol = normalize_symbol(symbol)
+    return symbol
+
+
 def analysis_to_coin_info(analysis: CoinAnalysis) -> CoinInfo:
     """将分析结果转换为 CoinInfo
 
@@ -342,7 +353,7 @@ async def root():
     """根路径"""
     return {
         "name": "NOFX Local Data Server",
-        "version": "2.0.0",
+        "version": "2.1.0",
         "status": "running",
         "compatibility_mode": settings.compatibility_mode,
         "providers": {
@@ -356,6 +367,8 @@ async def root():
                 "description": "NoFx 核心兼容接口（AI500 / OI / Coin / Funding / Price / Heatmap）",
                 "endpoints": [
                     "/api/ai500/list",
+                    "/api/ai500/{symbol}",
+                    "/api/ai500/stats",
                     "/api/oi/top-ranking",
                     "/api/oi/low-ranking",
                     "/api/oi-cap/ranking",
@@ -382,6 +395,8 @@ async def root():
                     "/api/netflow/low-ranking",
                     "/api/system/status",
                     "/api/system/capabilities",
+                    "/api/system/provider-usage",
+                    "/api/system/nofx-compatibility",
                     "/api/cache/status",
                 ],
             },
@@ -485,6 +500,91 @@ async def get_ai500_list(
         logger.error(f"获取 AI500 列表失败: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
+
+
+
+@app.get("/api/ai500/{symbol}")
+async def get_ai500_symbol(
+    symbol: str,
+    auth: str = Query(..., description="认证密钥"),
+    include: str = Query("price,oi,netflow,ai500", description="逗号分隔的字段集合"),
+):
+    """获取单币 AI500 视图（本地拼装版）。"""
+    if not verify_auth(auth):
+        raise HTTPException(status_code=401, detail="认证失败")
+
+    symbol = normalize_symbol(symbol)
+    include_items = [x.strip() for x in include.split(",") if x.strip()]
+
+    await load_cmc_data_for_analyzer()
+    all_analysis = await analyzer.analyze_all(include_neutral=True, filter_low_oi=False)
+    analysis = all_analysis.get(symbol)
+    if not analysis:
+        raise HTTPException(status_code=404, detail=f"币种 {symbol} 不存在")
+
+    coin_resp = await get_coin(symbol=symbol, auth=auth, include=include)
+    return {
+        "success": True,
+        "data": {
+            "symbol": symbol,
+            "ai500": {
+                "score": analysis.score,
+                "is_active": analysis.score >= 70 and analysis.direction != Direction.NEUTRAL,
+                "direction": analysis.direction.value,
+                "confidence": analysis.confidence,
+                "reasons": analysis.reasons,
+                "tags": analysis.tags,
+                "entry_timing": analysis.entry_timing,
+                "timing_score": analysis.timing_score,
+            },
+            "coin": coin_resp.get("data", {}),
+            "analysis": analysis_to_coin_info(analysis).model_dump(),
+            "include": include_items,
+            "mode": "local_proxy_ai500",
+            "timestamp": int(time.time()),
+        }
+    }
+
+
+@app.get("/api/ai500/stats")
+async def get_ai500_stats(auth: str = Query(..., description="认证密钥")):
+    """获取本地 AI500 候选池统计。"""
+    if not verify_auth(auth):
+        raise HTTPException(status_code=401, detail="认证失败")
+
+    await load_cmc_data_for_analyzer()
+    all_analysis = await analyzer.analyze_all(include_neutral=True, filter_low_oi=False)
+    rows = list(all_analysis.values())
+    if not rows:
+        return {"success": True, "data": {"count": 0, "timestamp": int(time.time())}}
+
+    active = [x for x in rows if x.score >= 70 and x.direction != Direction.NEUTRAL]
+    long_count = sum(1 for x in active if x.direction == Direction.LONG)
+    short_count = sum(1 for x in active if x.direction == Direction.SHORT)
+    scores = [x.score for x in rows]
+    active_scores = [x.score for x in active] or [0.0]
+
+    return {
+        "success": True,
+        "data": {
+            "universe_count": len(rows),
+            "active_count": len(active),
+            "active_ratio": len(active) / len(rows) if rows else 0.0,
+            "direction_distribution": {
+                "long": long_count,
+                "short": short_count,
+                "neutral": len(rows) - long_count - short_count,
+            },
+            "score_stats": {
+                "avg": sum(scores) / len(scores),
+                "max": max(scores),
+                "min": min(scores),
+                "active_avg": sum(active_scores) / len(active_scores),
+            },
+            "mode": "local_proxy_ai500",
+            "timestamp": int(time.time()),
+        }
+    }
 
 @app.get("/api/oi/top-ranking", response_model=OIRankingResponse)
 async def get_oi_top_ranking(
@@ -639,12 +739,12 @@ async def get_coin_data(
     if not verify_auth(auth):
         raise HTTPException(status_code=401, detail="认证失败")
 
-    symbol = symbol.upper()
-    if not symbol.endswith("USDT"):
-        symbol = symbol + "USDT"
+    symbol = normalize_symbol(symbol)
 
     cache = get_cache()
-    cache_key = cache.get_coin_key(symbol)
+    include_items = {item.strip() for item in include.split(",") if item.strip()}
+    include_key = ",".join(sorted(include_items)) or "default"
+    cache_key = cache.get_coin_key(f"{symbol}:{include_key}")
     cached_data = cache.get(cache_key)
     if cached_data:
         logger.debug(f"coin/{symbol} 命中缓存")
@@ -663,8 +763,6 @@ async def get_coin_data(
                 "price": ticker.price,
             },
         }
-
-        include_items = {item.strip() for item in include.split(",") if item.strip()}
 
         if "price" in include_items:
             all_price_changes = await collector.calculate_all_price_changes(symbol, ticker.price)
@@ -691,14 +789,26 @@ async def get_coin_data(
 
         if "netflow" in include_items:
             netflow = await collector.get_flow_proxy(symbol, duration="1h", trade="all")
+            future_flow = netflow.get("future_flow", 0.0)
+            spot_flow = netflow.get("spot_flow", 0.0)
+            total_flow = netflow.get("amount", future_flow + spot_flow)
             result["data"]["netflow"] = {
+                # 尽量贴近官方字段
                 "institution": {
-                    "future": {"1h": netflow.get("future_flow", 0.0)},
-                    "spot": {"1h": netflow.get("spot_flow", 0.0)},
+                    "1h": total_flow,
+                    "future": {"1h": future_flow},
+                    "spot": {"1h": spot_flow},
                 },
                 "personal": {
+                    "1h": 0.0,
                     "future": {"1h": 0.0},
                     "spot": {"1h": 0.0},
+                },
+                # 本地额外字段，显式告知为代理模式
+                "breakdown": {
+                    "future_flow": future_flow,
+                    "spot_flow": spot_flow,
+                    "amount": total_flow,
                 },
                 "mode": netflow.get("mode", "proxy_taker_imbalance"),
             }
@@ -707,6 +817,18 @@ async def get_coin_data(
         funding = funding_data.get(symbol)
         if funding:
             result["data"]["funding_rate"] = funding.funding_rate
+
+        if "ai500" in include_items:
+            await load_cmc_data_for_analyzer()
+            all_analysis = await analyzer.analyze_all(include_neutral=True, filter_low_oi=False)
+            analysis = all_analysis.get(symbol)
+            if analysis:
+                result["data"]["ai500"] = {
+                    "score": analysis.score,
+                    "is_active": analysis.score >= 70 and analysis.direction != Direction.NEUTRAL,
+                    "direction": analysis.direction.value,
+                    "confidence": analysis.confidence,
+                }
 
         cache.set(cache_key, result["data"], ttl=settings.cache_ttl_analysis)
         return result
@@ -744,6 +866,7 @@ async def get_short_candidates(
                 "coins": [analysis_to_coin_info(c).model_dump() for c in coins],
                 "count": len(coins),
                 "direction": "short",
+                "provider": cmc_collector._pick_provider(),
                 "timestamp": int(time.time())
             }
         }
@@ -776,6 +899,7 @@ async def get_long_candidates(
                 "coins": [analysis_to_coin_info(c).model_dump() for c in coins],
                 "count": len(coins),
                 "direction": "long",
+                "provider": cmc_collector._pick_provider(),
                 "timestamp": int(time.time())
             }
         }
@@ -843,6 +967,7 @@ async def get_high_volatility_coins(
                 "count": len(coins),
                 "type": "high_volatility",
                 "min_volatility": min_volatility,
+                "provider": cmc_collector._pick_provider(),
                 "timestamp": int(time.time())
             }
         }
@@ -955,6 +1080,7 @@ async def get_market_overview(auth: str = Query(..., description="认证密钥")
                 },
                 # 全网市场情绪
                 "global": global_sentiment,
+                "provider": cmc_collector._pick_provider(),
                 "timestamp": int(time.time())
             }
         }
@@ -989,6 +1115,7 @@ async def get_fear_greed(
         result = {
             "success": True,
             "data": {
+                "provider": cmc_collector._pick_provider(),
                 "timestamp": int(time.time())
             }
         }
@@ -1019,6 +1146,7 @@ async def get_fear_greed(
             "success": False,
             "data": {
                 "error": str(e),
+                "provider": cmc_collector._pick_provider(),
                 "timestamp": int(time.time())
             }
         }
@@ -1054,6 +1182,7 @@ async def get_market_sentiment(auth: str = Query(..., description="认证密钥"
             "data": {
                 "available": False,
                 "error": str(e),
+                "provider": cmc_collector._pick_provider(),
                 "timestamp": int(time.time())
             }
         }
@@ -1125,9 +1254,7 @@ async def get_low_funding_rates(
 async def get_symbol_funding_rate(symbol: str, auth: str = Query(..., description="认证密钥")):
     if not verify_auth(auth):
         raise HTTPException(status_code=401, detail="认证失败")
-    symbol = symbol.upper()
-    if not symbol.endswith("USDT"):
-        symbol += "USDT"
+    symbol = normalize_symbol(symbol)
     rates = await collector.get_all_funding_rates()
     row = rates.get(symbol)
     if not row:
@@ -1153,9 +1280,7 @@ async def get_oi_cap_ranking(
 async def get_future_heatmap(symbol: str, auth: str = Query(..., description="认证密钥")):
     if not verify_auth(auth):
         raise HTTPException(status_code=401, detail="认证失败")
-    symbol = symbol.upper()
-    if not symbol.endswith("USDT"):
-        symbol += "USDT"
+    symbol = normalize_symbol(symbol)
     row = await collector.get_heatmap(symbol, trade="future")
     if not row:
         raise HTTPException(status_code=404, detail=f"热力图数据不存在: {symbol}")
@@ -1166,9 +1291,7 @@ async def get_future_heatmap(symbol: str, auth: str = Query(..., description="�
 async def get_spot_heatmap(symbol: str, auth: str = Query(..., description="认证密钥")):
     if not verify_auth(auth):
         raise HTTPException(status_code=401, detail="认证失败")
-    symbol = symbol.upper()
-    if not symbol.endswith("USDT"):
-        symbol += "USDT"
+    symbol = normalize_symbol(symbol)
     row = await collector.get_heatmap(symbol, trade="spot")
     if not row:
         raise HTTPException(status_code=404, detail=f"热力图数据不存在: {symbol}")
@@ -1213,11 +1336,31 @@ async def get_system_capabilities(auth: str = Query(..., description="认证密�
             ],
             "providers": {
                 "market_cap_provider": cmc_collector.active_provider,
+                "configured_macro_providers": cmc_collector.configured_providers,
                 "hyperliquid_enabled": settings.hyperliquid_enabled,
             },
+            "compatibility_summary": build_mapping_summary()["summary"],
             "timestamp": int(time.time()),
         }
     }
+
+
+
+
+@app.get("/api/system/provider-usage")
+async def get_provider_usage(auth: str = Query(..., description="认证密钥")):
+    if not verify_auth(auth):
+        raise HTTPException(status_code=401, detail="认证失败")
+    return {"success": True, "data": await cmc_collector.get_provider_usage()}
+
+
+@app.get("/api/system/nofx-compatibility")
+async def get_nofx_compatibility(auth: str = Query(..., description="认证密钥")):
+    if not verify_auth(auth):
+        raise HTTPException(status_code=401, detail="认证失败")
+    data = build_mapping_summary()
+    data["timestamp"] = int(time.time())
+    return {"success": True, "data": data}
 
 
 @app.get("/health")
@@ -1319,8 +1462,8 @@ async def get_cmc_listings(
     if not verify_auth(auth):
         raise HTTPException(status_code=401, detail="认证失败")
 
-    if not settings.cmc_api_key:
-        raise HTTPException(status_code=503, detail="CMC API 未配置")
+    if not cmc_collector.is_available:
+        raise HTTPException(status_code=503, detail="CoinGecko / CMC 宏观数据源未配置")
 
     try:
         coins = await cmc_collector.get_latest_listings(limit)
@@ -1349,6 +1492,7 @@ async def get_cmc_listings(
             "data": {
                 "coins": coin_list,
                 "count": len(coin_list),
+                "provider": cmc_collector._pick_provider(),
                 "timestamp": int(time.time())
             }
         }
@@ -1370,8 +1514,8 @@ async def get_cmc_trending(
     if not verify_auth(auth):
         raise HTTPException(status_code=401, detail="认证失败")
 
-    if not settings.cmc_api_key:
-        raise HTTPException(status_code=503, detail="CMC API 未配置")
+    if not cmc_collector.is_available:
+        raise HTTPException(status_code=503, detail="CoinGecko / CMC 宏观数据源未配置")
 
     try:
         trending = await cmc_collector.get_trending(limit)
@@ -1393,6 +1537,7 @@ async def get_cmc_trending(
                 "coins": coin_list,
                 "count": len(coin_list),
                 "type": "trending",
+                "provider": cmc_collector._pick_provider(),
                 "timestamp": int(time.time())
             }
         }
@@ -1415,8 +1560,8 @@ async def get_cmc_gainers_losers(
     if not verify_auth(auth):
         raise HTTPException(status_code=401, detail="认证失败")
 
-    if not settings.cmc_api_key:
-        raise HTTPException(status_code=503, detail="CMC API 未配置")
+    if not cmc_collector.is_available:
+        raise HTTPException(status_code=503, detail="CoinGecko / CMC 宏观数据源未配置")
 
     try:
         gainers, losers = await cmc_collector.get_gainers_losers(limit, time_period)
@@ -1443,6 +1588,7 @@ async def get_cmc_gainers_losers(
                     } for c in losers
                 ],
                 "time_period": time_period,
+                "provider": cmc_collector._pick_provider(),
                 "timestamp": int(time.time())
             }
         }
@@ -1461,8 +1607,8 @@ async def get_cmc_market_overview(auth: str = Query(..., description="认证密�
     if not verify_auth(auth):
         raise HTTPException(status_code=401, detail="认证失败")
 
-    if not settings.cmc_api_key:
-        raise HTTPException(status_code=503, detail="CMC API 未配置")
+    if not cmc_collector.is_available:
+        raise HTTPException(status_code=503, detail="CoinGecko / CMC 宏观数据源未配置")
 
     try:
         overview = await cmc_collector.get_market_overview()
@@ -1480,6 +1626,7 @@ async def get_cmc_market_overview(auth: str = Query(..., description="认证密�
                 "active_cryptocurrencies": overview.get("active_cryptocurrencies", 0),
                 "market_cap_change_24h": overview.get("total_market_cap_yesterday_percentage_change", 0),
                 "volume_change_24h": overview.get("total_volume_24h_yesterday_percentage_change", 0),
+                "provider": cmc_collector._pick_provider(),
                 "timestamp": int(time.time())
             }
         }
