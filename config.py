@@ -1,82 +1,103 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""
-NOFX 本地数据服务器 - 配置文件
+"""NOFX 本地数据服务器配置。"""
 
-环境变量:
-- CMC_PRO_API_ENDPOINT: CoinMarketCap API 端点
-- CMC_PRO_API_KEY: CoinMarketCap API 密钥
-- BINANCE_API_KEY_READONLY: Binance 只读 API Key
-- BINANCE_API_SECRET_READONLY: Binance 只读 API Secret
-"""
+from __future__ import annotations
 
 import os
 from typing import Optional
-from pydantic_settings import BaseSettings
+
+from pydantic import Field
+from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 class Settings(BaseSettings):
-    """服务器配置"""
+    """服务器配置。"""
 
-    # 服务器配置
+    model_config = SettingsConfigDict(
+        env_file=".env",
+        case_sensitive=False,
+        extra="ignore",
+    )
+
+    # 基础服务配置
     host: str = "0.0.0.0"
-    port: int = 30007  # 与官方 30006 不同，避免冲突
+    port: int = 30007
     debug: bool = False
 
-    # 认证密钥（与官方兼容）
+    # 认证配置
     auth_key: str = "cm_568c67eae410d912c54c"
+    allow_legacy_public_key: bool = True
 
-    # Binance API
+    # Binance 只读配置
     binance_api_key: Optional[str] = None
     binance_api_secret: Optional[str] = None
 
-    # CoinMarketCap API
+    # Hyperliquid（行情接口本身不需要私钥，但预留给后续账户态功能）
+    hyperliquid_enabled: bool = True
+    hyperliquid_address: Optional[str] = None
+    hyperliquid_private_key: Optional[str] = None
+    hyperliquid_dex: str = ""
+
+    # Market-cap / macro 数据源（优先 CoinGecko Demo，其次 CMC）
+    market_data_provider: str = "auto"  # auto|coingecko|cmc|none
+    coingecko_api_endpoint: str = "https://api.coingecko.com/api/v3"
+    coingecko_api_key: Optional[str] = None
     cmc_api_endpoint: Optional[str] = None
     cmc_api_key: Optional[str] = None
 
-    # 缓存配置（秒）
-    cache_ttl_ticker: int = 5  # 行情数据缓存
-    cache_ttl_oi: int = 30  # OI 数据缓存
-    cache_ttl_coin_list: int = 300  # 币种列表缓存
-    cache_ttl_analysis: int = 60  # 分析结果缓存
+    # 缓存 TTL（秒）
+    cache_ttl_ticker: int = 5
+    cache_ttl_oi: int = 30
+    cache_ttl_coin_list: int = 300
+    cache_ttl_analysis: int = 60
+    cache_ttl_macro: int = 300
+    cache_ttl_heatmap: int = 15
+    cache_ttl_ranking: int = 30
 
     # 缓存预热配置
-    cache_warmup_enabled: bool = True  # 是否启用缓存预热
-    cache_warmup_ttl: int = 1800  # 预热缓存 TTL（秒），默认 30 分钟
+    cache_warmup_enabled: bool = True
+    cache_warmup_ttl: int = 1800
 
-    # 筛选参数
-    max_coins: int = 20  # 最多返回币种数
-    min_volume_24h: float = 10_000_000  # 最小24h交易量(USDT)
-    min_oi_value: float = 5_000_000  # 最小持仓价值(USDT)
+    # 选币阈值
+    max_coins: int = 20
+    min_volume_24h: float = 10_000_000
+    min_oi_value: float = 5_000_000
+    min_oi_value_usd: float = 15_000_000
 
-    # OI 流动性过滤（与 nofx 后端同步）
-    # nofx 后端使用 15M USD 阈值过滤低流动性币种
-    min_oi_value_usd: float = 15_000_000  # 最小 OI 价值阈值（USD），低于此值的币种会被过滤
+    # 风险/波动阈值
+    flash_crash_price_drop: float = -3.0
+    flash_crash_oi_surge: float = 10.0
+    high_volatility_threshold: float = 5.0
 
-    # 闪崩检测参数
-    flash_crash_price_drop: float = -3.0  # 1小时跌幅阈值(%)
-    flash_crash_oi_surge: float = 10.0  # OI 增加阈值(%)
-    high_volatility_threshold: float = 5.0  # 高波动率阈值(%)
+    # 监控与本地持久化
+    snapshot_dir: str = "data"
+    snapshot_file: str = "data/provider_snapshots.json"
 
-    class Config:
-        env_file = ".env"
-        case_sensitive = False
+    # 兼容性说明
+    compatibility_mode: str = "nofx-core"  # nofx-core|nofx-plus
+
 
 
 def load_settings() -> Settings:
-    """加载配置，优先从环境变量读取"""
+    """从环境变量加载配置。"""
     settings = Settings()
 
-    # 从环境变量加载 Binance API
-    settings.binance_api_key = os.getenv("BINANCE_API_KEY_READONLY")
-    settings.binance_api_secret = os.getenv("BINANCE_API_SECRET_READONLY")
+    settings.binance_api_key = os.getenv("BINANCE_API_KEY_READONLY") or os.getenv("BINANCE_API_KEY")
+    settings.binance_api_secret = os.getenv("BINANCE_API_SECRET_READONLY") or os.getenv("BINANCE_API_SECRET")
 
-    # 从环境变量加载 CMC API
-    settings.cmc_api_endpoint = os.getenv("CMC_PRO_API_ENDPOINT")
-    settings.cmc_api_key = os.getenv("CMC_PRO_API_KEY")
+    settings.cmc_api_endpoint = os.getenv("CMC_PRO_API_ENDPOINT") or settings.cmc_api_endpoint or "https://pro-api.coinmarketcap.com"
+    settings.cmc_api_key = os.getenv("CMC_PRO_API_KEY") or settings.cmc_api_key
+
+    settings.coingecko_api_key = os.getenv("COINGECKO_API_KEY") or os.getenv("COINGECKO_DEMO_API_KEY") or settings.coingecko_api_key
+    settings.hyperliquid_address = os.getenv("HYPERLIQUID_ADDRESS") or settings.hyperliquid_address
+    settings.hyperliquid_private_key = os.getenv("HYPERLIQUID_PRIVATE_KEY") or settings.hyperliquid_private_key
+
+    # 兼容旧环境变量
+    if os.getenv("NOFX_LOCAL_AUTH_KEY"):
+        settings.auth_key = os.getenv("NOFX_LOCAL_AUTH_KEY", settings.auth_key)
 
     return settings
 
 
-# 全局配置实例
 settings = load_settings()
