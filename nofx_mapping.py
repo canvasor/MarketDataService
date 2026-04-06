@@ -93,6 +93,7 @@ NOFX_COMPATIBILITY_MATRIX: List[Dict[str, Any]] = [
             "price_change.{duration}": "data.price_change.{duration}",
             "oi.binance": "data.oi.binance",
             "oi.hyperliquid": "data.oi.hyperliquid",
+            "oi.okx": "data.oi.okx",
             "netflow.institution.{duration}": "data.netflow.institution.{duration}",
             "netflow.personal.{duration}": "data.netflow.personal.{duration}",
             "ai500.score": "data.ai500.score",
@@ -202,10 +203,10 @@ GAP_CHECKLIST: List[Dict[str, Any]] = [
         "suggestion": "可在本地 UI / strategy layer 统计查询热度。",
     },
     {
-        "name": "Bybit/OKX OI 横向对照",
+        "name": "Bybit OI 横向对照",
         "severity": "medium",
         "status": "recommended_next",
-        "suggestion": "二阶段优先补 Bybit 与 OKX 公共 market endpoints。",
+        "suggestion": "二阶段优先补 Bybit 公共 market endpoints。",
     },
 ]
 

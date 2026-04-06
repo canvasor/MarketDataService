@@ -14,7 +14,9 @@ class TestUnifiedMarketCollector:
     @pytest.fixture
     def collector(self):
         c = UnifiedMarketCollector(hyperliquid_enabled=False, snapshot_file="")
-        return c
+        yield c
+        import asyncio
+        asyncio.run(c.close())
 
     def test_find_snapshot_delta(self, collector):
         history = [
@@ -111,10 +113,10 @@ class TestUnifiedMarketCollector:
 
     @pytest.mark.asyncio
     async def test_get_flow_proxy_formula(self, collector, monkeypatch):
-        monkeypatch.setattr('binance_collector.BinanceCollector.get_symbol_klines', AsyncMock(return_value=[{
+        collector.get_symbol_klines = AsyncMock(return_value=[{
             "quote_volume": 1000.0,
             "taker_buy_quote_volume": 700.0,
-        }]))
+        }])
         collector.get_spot_klines = AsyncMock(return_value=[{
             "quote_volume": 500.0,
             "taker_buy_quote_volume": 200.0,
@@ -126,3 +128,15 @@ class TestUnifiedMarketCollector:
         assert result["spot_flow"] == -100.0
         assert result["amount"] == 300.0
         assert result["mode"] == "proxy_taker_imbalance"
+
+
+    @pytest.mark.asyncio
+    async def test_get_all_tickers_merges_okx(self, collector, monkeypatch):
+        monkeypatch.setattr('binance_collector.BinanceCollector.get_all_tickers', AsyncMock(return_value={}))
+        collector.okx = MagicMock()
+        collector.okx.get_all_swap_tickers = AsyncMock(return_value={
+            "ZECUSDT": MagicMock(price=30.0, price_change_24h=4.0, volume_24h=1000000.0, high_24h=31.0, low_24h=28.0)
+        })
+        result = await collector.get_all_tickers()
+        assert "ZECUSDT" in result
+        assert result["ZECUSDT"].price == 30.0

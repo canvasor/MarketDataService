@@ -39,6 +39,12 @@ class Settings(BaseSettings):
     hyperliquid_private_key: Optional[str] = None
     hyperliquid_dex: str = ""
 
+    # OKX（公共行情接口默认无需认证；认证信息仅为后续私有接口/执行层预留）
+    okx_enabled: bool = True
+    okx_api_key: Optional[str] = None
+    okx_api_secret: Optional[str] = None
+    okx_api_passphrase: Optional[str] = None
+
     # Market-cap / macro 数据源（优先 CoinGecko Demo，其次 CMC）
     market_data_provider: str = "auto"  # auto|coingecko|cmc|none
     coingecko_api_endpoint: str = "https://api.coingecko.com/api/v3"
@@ -81,6 +87,10 @@ class Settings(BaseSettings):
     snapshot_dir: str = "data"
     snapshot_file: str = "data/provider_snapshots.json"
 
+    # 分析宇宙配置
+    analysis_universe_mode: str = "fixed"  # fixed|hybrid|all
+    analysis_fixed_symbols: str = "BTCUSDT,ETHUSDT,SOLUSDT,BNBUSDT,HYPEUSDT,ZECUSDT"
+
     # 兼容性说明
     compatibility_mode: str = "nofx-core"  # nofx-core|nofx-plus
 
@@ -99,6 +109,15 @@ def load_settings() -> Settings:
     settings.coingecko_api_key = os.getenv("COINGECKO_API_KEY") or os.getenv("COINGECKO_DEMO_API_KEY") or settings.coingecko_api_key
     settings.hyperliquid_address = os.getenv("HYPERLIQUID_ADDRESS") or settings.hyperliquid_address
     settings.hyperliquid_private_key = os.getenv("HYPERLIQUID_PRIVATE_KEY") or settings.hyperliquid_private_key
+
+    settings.okx_api_key = os.getenv("OKX_API_KEY") or settings.okx_api_key
+    settings.okx_api_secret = os.getenv("OKX_API_SECRET") or settings.okx_api_secret
+    settings.okx_api_passphrase = os.getenv("OKX_API_PASSPHRASE") or settings.okx_api_passphrase
+
+    if os.getenv("ANALYSIS_UNIVERSE_MODE"):
+        settings.analysis_universe_mode = os.getenv("ANALYSIS_UNIVERSE_MODE", settings.analysis_universe_mode)
+    if os.getenv("ANALYSIS_FIXED_SYMBOLS"):
+        settings.analysis_fixed_symbols = os.getenv("ANALYSIS_FIXED_SYMBOLS", settings.analysis_fixed_symbols)
 
     # 兼容旧环境变量
     if os.getenv("NOFX_LOCAL_AUTH_KEY"):

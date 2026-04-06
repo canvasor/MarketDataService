@@ -329,3 +329,24 @@ class TestATRTagFormat:
 
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])
+
+
+class TestStrategyEndpoints:
+    @pytest.fixture
+    def client(self):
+        return TestClient(app)
+
+    def test_strategy_universe_endpoint(self, client):
+        response = client.get('/api/system/strategy-universe', params={'auth': 'cm_568c67eae410d912c54c'})
+        assert response.status_code == 200
+        data = response.json()
+        assert data['success'] is True
+        assert 'symbols' in data['data']
+
+    def test_pair_template_endpoint(self, client):
+        response = client.get('/api/strategy/pair-neutral/template', params={'auth': 'cm_568c67eae410d912c54c'})
+        assert response.status_code == 200
+        data = response.json()
+        assert data['success'] is True
+        assert 'template' in data['data']
+        assert 'backtest_fields' in data['data']

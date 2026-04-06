@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""多源市场数据聚合器：Binance 为主，Hyperliquid 为辅。"""
+"""多源市场数据聚合器：Binance 为主，Hyperliquid/OKX 为补充。"""
 
 from __future__ import annotations
 
@@ -17,6 +17,7 @@ from cachetools import TTLCache
 
 from binance_collector import BinanceCollector, FundingData, OIData, TickerData
 from hyperliquid_collector import HyperliquidCollector
+from okx_collector import OKXCollector
 
 logger = logging.getLogger(__name__)
 
@@ -51,12 +52,27 @@ class UnifiedMarketCollector(BinanceCollector):
         api_secret: Optional[str] = None,
         hyperliquid_enabled: bool = True,
         hyperliquid_dex: str = "",
+        okx_enabled: bool = True,
+        okx_api_key: Optional[str] = None,
+        okx_api_secret: Optional[str] = None,
+        okx_api_passphrase: Optional[str] = None,
         snapshot_file: str = "data/provider_snapshots.json",
+        focus_symbols: Optional[List[str]] = None,
+        universe_mode: str = "fixed",
     ):
         super().__init__(api_key=api_key, api_secret=api_secret)
         self.hyperliquid_enabled = hyperliquid_enabled
         self.hyperliquid = HyperliquidCollector(dex=hyperliquid_dex) if hyperliquid_enabled else None
+        self.okx_enabled = okx_enabled
+        self.okx = OKXCollector(
+            api_key=okx_api_key,
+            api_secret=okx_api_secret,
+            api_passphrase=okx_api_passphrase,
+            enabled=okx_enabled,
+        ) if okx_enabled else None
         self.snapshot_file = snapshot_file
+        self.focus_symbols = {s.upper().strip() for s in (focus_symbols or []) if s}
+        self.universe_mode = (universe_mode or "fixed").lower()
         self._spot_kline_cache: TTLCache = TTLCache(maxsize=1000, ttl=30)
         self._price_ranking_cache: TTLCache = TTLCache(maxsize=50, ttl=20)
         self._netflow_cache: TTLCache = TTLCache(maxsize=100, ttl=20)
@@ -64,13 +80,20 @@ class UnifiedMarketCollector(BinanceCollector):
         self._provider_status: Dict[str, Any] = {
             "binance": {"enabled": True, "last_success": 0, "errors": 0},
             "hyperliquid": {"enabled": hyperliquid_enabled, "last_success": 0, "errors": 0},
+            "okx": {"enabled": okx_enabled, "last_success": 0, "errors": 0},
         }
         self._snapshot_state: Dict[str, Any] = self._load_snapshot_state()
 
     async def close(self):
         await super().close()
-        if self.hyperliquid:
-            await self.hyperliquid.close()
+        if self.hyperliquid and hasattr(self.hyperliquid, "close"):
+            maybe = self.hyperliquid.close()
+            if asyncio.iscoroutine(maybe):
+                await maybe
+        if self.okx and hasattr(self.okx, "close"):
+            maybe = self.okx.close()
+            if asyncio.iscoroutine(maybe):
+                await maybe
         self._save_snapshot_state()
 
     # ---------- 基础状态 ----------
@@ -109,6 +132,23 @@ class UnifiedMarketCollector(BinanceCollector):
     def get_provider_status(self) -> Dict[str, Any]:
         return self._provider_status
 
+    def _should_include_symbol(self, symbol: str) -> bool:
+        symbol = symbol.upper().strip()
+        if self.universe_mode == "all":
+            return True
+        if self.universe_mode == "fixed":
+            return not self.focus_symbols or symbol in self.focus_symbols
+        # hybrid
+        return True
+
+    def _apply_universe_filter(self, symbols: List[str]) -> List[str]:
+        if self.universe_mode != "fixed" or not self.focus_symbols:
+            return sorted(set(symbols))
+        return [s for s in sorted(set(symbols)) if s in self.focus_symbols]
+
+    def _oi_history_key(self, provider: str) -> str:
+        return f"{provider}_oi"
+
     # ---------- 多源 symbol / ticker ----------
     async def get_usdt_symbols(self, force_refresh: bool = False) -> List[str]:
         binance_symbols = await super().get_usdt_symbols(force_refresh=force_refresh)
@@ -122,39 +162,71 @@ class UnifiedMarketCollector(BinanceCollector):
                 logger.warning("获取 Hyperliquid symbols 失败: %s", exc)
                 self._mark_provider_error("hyperliquid")
 
-        return sorted(merged)
+        if self.okx:
+            try:
+                merged.update(await self.okx.get_swap_symbols())
+                self._mark_provider_success("okx")
+            except Exception as exc:
+                logger.warning("获取 OKX symbols 失败: %s", exc)
+                self._mark_provider_error("okx")
+
+        return self._apply_universe_filter(list(merged))
 
     async def get_all_tickers(self) -> Dict[str, TickerData]:
         tickers = await super().get_all_tickers()
         if tickers:
             self._mark_provider_success("binance")
 
-        if not self.hyperliquid:
-            return tickers
+        if self.hyperliquid:
+            try:
+                contexts = await self.hyperliquid.get_all_asset_contexts()
+                self._mark_provider_success("hyperliquid")
+            except Exception as exc:
+                logger.warning("获取 Hyperliquid 上下文失败: %s", exc)
+                self._mark_provider_error("hyperliquid")
+                contexts = {}
 
-        try:
-            contexts = await self.hyperliquid.get_all_asset_contexts()
-            self._mark_provider_success("hyperliquid")
-        except Exception as exc:
-            logger.warning("获取 Hyperliquid 上下文失败: %s", exc)
-            self._mark_provider_error("hyperliquid")
-            contexts = {}
+            for symbol, ctx in contexts.items():
+                if symbol in tickers or not self._should_include_symbol(symbol):
+                    continue
+                prev_day = ctx.prev_day_price or 0
+                price_change_24h = ((ctx.price - prev_day) / prev_day * 100) if prev_day > 0 else 0.0
+                volatility = abs(price_change_24h)
+                tickers[symbol] = TickerData(
+                    symbol=symbol,
+                    price=ctx.price,
+                    price_change_24h=price_change_24h,
+                    volume_24h=ctx.day_notional_volume,
+                    high_24h=max(ctx.price, prev_day) if prev_day else ctx.price,
+                    low_24h=min(ctx.price, prev_day) if prev_day else ctx.price,
+                    volatility_24h=volatility,
+                )
 
-        for symbol, ctx in contexts.items():
-            if symbol in tickers:
-                continue
-            prev_day = ctx.prev_day_price or 0
-            price_change_24h = ((ctx.price - prev_day) / prev_day * 100) if prev_day > 0 else 0.0
-            volatility = abs(price_change_24h)
-            tickers[symbol] = TickerData(
-                symbol=symbol,
-                price=ctx.price,
-                price_change_24h=price_change_24h,
-                volume_24h=ctx.day_notional_volume,
-                high_24h=max(ctx.price, prev_day) if prev_day else ctx.price,
-                low_24h=min(ctx.price, prev_day) if prev_day else ctx.price,
-                volatility_24h=volatility,
-            )
+        if self.okx:
+            try:
+                okx_tickers = await self.okx.get_all_swap_tickers()
+                self._mark_provider_success("okx")
+            except Exception as exc:
+                logger.warning("获取 OKX tickers 失败: %s", exc)
+                self._mark_provider_error("okx")
+                okx_tickers = {}
+
+            for symbol, item in okx_tickers.items():
+                if symbol in tickers or not self._should_include_symbol(symbol):
+                    continue
+                volatility = ((item.high_24h - item.low_24h) / item.price * 100) if item.price > 0 else abs(item.price_change_24h)
+                tickers[symbol] = TickerData(
+                    symbol=symbol,
+                    price=item.price,
+                    price_change_24h=item.price_change_24h,
+                    volume_24h=item.volume_24h,
+                    high_24h=item.high_24h,
+                    low_24h=item.low_24h,
+                    volatility_24h=volatility,
+                )
+
+        if self.universe_mode == "fixed" and self.focus_symbols:
+            tickers = {k: v for k, v in tickers.items() if k in self.focus_symbols}
         return tickers
 
     async def get_symbol_klines(self, symbol: str, interval: str = "1h", limit: int = 4) -> List[Dict]:
@@ -169,48 +241,86 @@ class UnifiedMarketCollector(BinanceCollector):
             klines = await self.hyperliquid.get_symbol_klines(symbol, interval=interval, limit=limit)
             if klines:
                 return klines
+        if self.okx:
+            klines = await self.okx.get_symbol_klines(symbol, interval=interval, limit=limit, trade="swap")
+            if klines:
+                self._mark_provider_success("okx")
+                return klines
         return []
+
+    def _append_oi_snapshot(self, provider: str, symbol: str, oi: float, price: float) -> List[dict]:
+        key = self._oi_history_key(provider)
+        provider_state = self._snapshot_state.setdefault(key, {})
+        history = provider_state.setdefault(symbol, [])
+        now = int(time.time())
+        history.append({"ts": now, "oi": oi, "price": price})
+        cutoff = now - 8 * 24 * 3600
+        provider_state[symbol] = [item for item in history if item.get("ts", 0) >= cutoff]
+        return provider_state[symbol]
 
     async def get_all_oi(self) -> Dict[str, OIData]:
         results = await super().get_all_oi()
         if results:
             self._mark_provider_success("binance")
+        if self.universe_mode == "fixed" and self.focus_symbols:
+            results = {k: v for k, v in results.items() if k in self.focus_symbols}
 
-        if not self.hyperliquid:
-            return results
+        if self.hyperliquid:
+            try:
+                contexts = await self.hyperliquid.get_all_asset_contexts()
+                self._mark_provider_success("hyperliquid")
+            except Exception as exc:
+                logger.warning("获取 Hyperliquid OI 失败: %s", exc)
+                self._mark_provider_error("hyperliquid")
+                contexts = {}
 
-        try:
-            contexts = await self.hyperliquid.get_all_asset_contexts()
-            self._mark_provider_success("hyperliquid")
-        except Exception as exc:
-            logger.warning("获取 Hyperliquid OI 失败: %s", exc)
-            self._mark_provider_error("hyperliquid")
-            contexts = {}
+            for symbol, ctx in contexts.items():
+                if not self._should_include_symbol(symbol):
+                    continue
+                history = self._append_oi_snapshot("hyperliquid", symbol, ctx.open_interest, ctx.price)
+                one_hour = self._find_snapshot_delta(history, ctx.open_interest, ctx.price, 3600)
+                four_hour = self._find_snapshot_delta(history, ctx.open_interest, ctx.price, 4 * 3600)
+                day = self._find_snapshot_delta(history, ctx.open_interest, ctx.price, 24 * 3600)
 
-        hl_state = self._snapshot_state.setdefault("hyperliquid_oi", {})
-        now = int(time.time())
+                if symbol not in results:
+                    results[symbol] = OIData(
+                        symbol=symbol,
+                        oi_value=ctx.oi_value_usd,
+                        oi_coins=ctx.open_interest,
+                        oi_change_1h=one_hour["pct"],
+                        oi_change_4h=four_hour["pct"],
+                        oi_change_24h=day["pct"],
+                        oi_delta_value_1h=one_hour["delta_value"],
+                    )
 
-        for symbol, ctx in contexts.items():
-            history = hl_state.setdefault(symbol, [])
-            history.append({"ts": now, "oi": ctx.open_interest, "price": ctx.price})
-            cutoff = now - 8 * 24 * 3600
-            hl_state[symbol] = [item for item in history if item.get("ts", 0) >= cutoff]
-            history = hl_state[symbol]
+        if self.okx:
+            try:
+                symbols = self._apply_universe_filter(await self.okx.get_swap_symbols())
+                okx_ois = await self.okx.get_all_open_interest(symbols=symbols)
+                okx_tickers = await self.okx.get_all_swap_tickers()
+                self._mark_provider_success("okx")
+            except Exception as exc:
+                logger.warning("获取 OKX OI 失败: %s", exc)
+                self._mark_provider_error("okx")
+                okx_ois = {}
+                okx_tickers = {}
 
-            one_hour = self._find_snapshot_delta(history, ctx.open_interest, ctx.price, 3600)
-            four_hour = self._find_snapshot_delta(history, ctx.open_interest, ctx.price, 4 * 3600)
-            day = self._find_snapshot_delta(history, ctx.open_interest, ctx.price, 24 * 3600)
-
-            if symbol not in results:
-                results[symbol] = OIData(
-                    symbol=symbol,
-                    oi_value=ctx.oi_value_usd,
-                    oi_coins=ctx.open_interest,
-                    oi_change_1h=one_hour["pct"],
-                    oi_change_4h=four_hour["pct"],
-                    oi_change_24h=day["pct"],
-                    oi_delta_value_1h=one_hour["delta_value"],
-                )
+            for symbol, item in okx_ois.items():
+                if not self._should_include_symbol(symbol):
+                    continue
+                price = okx_tickers.get(symbol).price if symbol in okx_tickers else 0.0
+                history = self._append_oi_snapshot("okx", symbol, item.oi_contracts, price)
+                one_hour = self._find_snapshot_delta(history, item.oi_contracts, price, 3600)
+                if symbol not in results:
+                    results[symbol] = OIData(
+                        symbol=symbol,
+                        oi_value=item.oi_value_usd,
+                        oi_coins=item.oi_contracts,
+                        oi_change_1h=one_hour["pct"],
+                        oi_change_4h=0.0,
+                        oi_change_24h=0.0,
+                        oi_delta_value_1h=one_hour["delta_value"],
+                    )
         return results
 
     def _find_snapshot_delta(self, history: List[dict], current_oi: float, current_price: float, window_seconds: int) -> Dict[str, float]:
@@ -249,26 +359,44 @@ class UnifiedMarketCollector(BinanceCollector):
         rates = await super().get_all_funding_rates()
         if rates:
             self._mark_provider_success("binance")
+        if self.universe_mode == "fixed" and self.focus_symbols:
+            rates = {k: v for k, v in rates.items() if k in self.focus_symbols}
 
-        if not self.hyperliquid:
-            return rates
+        if self.hyperliquid:
+            try:
+                contexts = await self.hyperliquid.get_all_asset_contexts()
+                self._mark_provider_success("hyperliquid")
+            except Exception as exc:
+                logger.warning("获取 Hyperliquid funding 失败: %s", exc)
+                self._mark_provider_error("hyperliquid")
+                contexts = {}
 
-        try:
-            contexts = await self.hyperliquid.get_all_asset_contexts()
-            self._mark_provider_success("hyperliquid")
-        except Exception as exc:
-            logger.warning("获取 Hyperliquid funding 失败: %s", exc)
-            self._mark_provider_error("hyperliquid")
-            contexts = {}
+            next_funding = int((time.time() // 3600 + 1) * 3600)
+            for symbol, ctx in contexts.items():
+                if symbol not in rates and self._should_include_symbol(symbol):
+                    rates[symbol] = FundingData(
+                        symbol=symbol,
+                        funding_rate=ctx.funding_rate,
+                        next_funding_time=next_funding,
+                    )
 
-        next_funding = int((time.time() // 3600 + 1) * 3600)
-        for symbol, ctx in contexts.items():
-            if symbol not in rates:
-                rates[symbol] = FundingData(
-                    symbol=symbol,
-                    funding_rate=ctx.funding_rate,
-                    next_funding_time=next_funding,
-                )
+        if self.okx:
+            try:
+                symbols = self._apply_universe_filter(await self.okx.get_swap_symbols())
+                okx_rates = await self.okx.get_all_funding_rates(symbols=symbols)
+                self._mark_provider_success("okx")
+            except Exception as exc:
+                logger.warning("获取 OKX funding 失败: %s", exc)
+                self._mark_provider_error("okx")
+                okx_rates = {}
+
+            for symbol, info in okx_rates.items():
+                if symbol not in rates and self._should_include_symbol(symbol):
+                    rates[symbol] = FundingData(
+                        symbol=symbol,
+                        funding_rate=info.funding_rate,
+                        next_funding_time=info.next_funding_time,
+                    )
         return rates
 
     async def get_exchange_oi_details(self, symbol: str) -> Dict[str, dict]:
@@ -287,7 +415,7 @@ class UnifiedMarketCollector(BinanceCollector):
         if self.hyperliquid:
             ctx = await self.hyperliquid.get_coin_context(symbol)
             if ctx:
-                hl_history = self._snapshot_state.setdefault("hyperliquid_oi", {}).get(symbol, [])
+                hl_history = self._snapshot_state.setdefault(self._oi_history_key("hyperliquid"), {}).get(symbol, [])
                 delta = self._find_snapshot_delta(hl_history, ctx.open_interest, ctx.price, 3600)
                 result["hyperliquid"] = {
                     "oi": ctx.open_interest,
@@ -295,6 +423,18 @@ class UnifiedMarketCollector(BinanceCollector):
                     "oi_delta_percent": delta["pct"],
                     "oi_delta_value": delta["delta_value"],
                     "funding_rate": ctx.funding_rate,
+                }
+        if self.okx:
+            okx_oi = await self.okx.get_open_interest(symbol)
+            if okx_oi:
+                okx_history = self._snapshot_state.setdefault(self._oi_history_key("okx"), {}).get(symbol, [])
+                price = (await self.okx.get_all_swap_tickers()).get(symbol).price if symbol in (await self.okx.get_all_swap_tickers()) else 0.0
+                delta = self._find_snapshot_delta(okx_history, okx_oi.oi_contracts, price, 3600)
+                result["okx"] = {
+                    "oi": okx_oi.oi_contracts,
+                    "oi_value": okx_oi.oi_value_usd,
+                    "oi_delta_percent": delta["pct"],
+                    "oi_delta_value": delta["delta_value"],
                 }
         return result
 
@@ -350,7 +490,7 @@ class UnifiedMarketCollector(BinanceCollector):
             return self._netflow_cache[cache_key]
 
         interval, limit = self.DURATION_TO_INTERVAL.get(duration, ("1h", 1))
-        futures_klines = await super().get_symbol_klines(symbol, interval=interval, limit=limit)
+        futures_klines = await self.get_symbol_klines(symbol, interval=interval, limit=limit)
         spot_klines = await self.get_spot_klines(symbol, interval=interval, limit=limit)
 
         def _flow(klines: List[Dict]) -> float:
@@ -489,9 +629,15 @@ class UnifiedMarketCollector(BinanceCollector):
             data = await self._spot_request("/api/v3/depth", {"symbol": symbol, "limit": 100})
         else:
             data = await self._request("/fapi/v1/depth", {"symbol": symbol, "limit": 100})
-        if isinstance(data, dict):
+        if isinstance(data, dict) and data:
             self._heatmap_cache[cache_key] = data
             return data
+        if self.okx:
+            okx_book = await self.okx.get_orderbook(symbol, trade="spot" if trade == "spot" else "swap", depth=100)
+            if okx_book:
+                data = {"bids": okx_book.get("bids", []), "asks": okx_book.get("asks", [])}
+                self._heatmap_cache[cache_key] = data
+                return data
         return {}
 
     def _build_heatmap_from_depth(self, symbol: str, depth: dict) -> Optional[dict]:
@@ -575,6 +721,9 @@ class UnifiedMarketCollector(BinanceCollector):
             "funding": len(rates),
             "binance_symbols": len(await super().get_usdt_symbols()),
             "hyperliquid_symbols": len(await self.hyperliquid.get_universe_symbols()) if self.hyperliquid else 0,
+            "okx_symbols": len(await self.okx.get_swap_symbols()) if self.okx else 0,
+            "universe_mode": self.universe_mode,
+            "focus_symbols": sorted(self.focus_symbols),
         }
         return {
             "providers": self.get_provider_status(),

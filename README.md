@@ -18,6 +18,7 @@
 ### 主数据源
 - **Binance Futures**：主行情、K线、OI、Funding、深度热力图、VWAP、候选池分析
 - **Hyperliquid**：补充永续覆盖、Funding、OI、L2 depth、candles
+- **OKX**：补充 SWAP ticker、OI、funding、candles、orderbook depth
 - **CoinGecko Demo / CMC Free**：市值、dominance、trending、gainers/losers、global market
 - **Alternative.me**：Fear & Greed
 
@@ -44,6 +45,10 @@
 - `GET /api/system/capabilities`
 - `GET /api/system/provider-usage`
 - `GET /api/system/nofx-compatibility`
+- `GET /api/system/strategy-universe`
+- `GET /api/system/nofx-adaptation-checklist`
+- `GET /api/strategy/pair-neutral/template`
+- `GET /api/strategy/pair-neutral/context`
 
 ---
 
@@ -82,8 +87,13 @@ COINGECKO_API_KEY=...
 CMC_PRO_API_KEY=...
 HYPERLIQUID_ADDRESS=0x...
 HYPERLIQUID_PRIVATE_KEY=...
+OKX_API_KEY=...
+OKX_API_SECRET=...
+OKX_API_PASSPHRASE=...
 BINANCE_API_KEY_READONLY=...
 BINANCE_API_SECRET_READONLY=...
+ANALYSIS_UNIVERSE_MODE=fixed
+ANALYSIS_FIXED_SYMBOLS=BTCUSDT,ETHUSDT,SOLUSDT,BNBUSDT,HYPEUSDT,ZECUSDT
 ```
 
 ---
@@ -138,6 +148,8 @@ pytest -q
 - `docs/NOFX_FIELD_MAPPING.md`
 - `docs/HYPERLIQUID_AGENT_ROTATION.md`
 - `docs/PRACTICAL_DEPLOYMENT.md`
+- `docs/NOFX_ADAPTATION_CHECKLIST.md`
+- `docs/BTC_ETH_PAIR_NEUTRAL_TEMPLATE.md`
 
 ---
 
