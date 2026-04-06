@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -140,3 +140,23 @@ class TestUnifiedMarketCollector:
         result = await collector.get_all_tickers()
         assert "ZECUSDT" in result
         assert result["ZECUSDT"].price == 30.0
+
+    @pytest.mark.asyncio
+    async def test_get_usdt_symbols_logs_hyperliquid_and_okx_connection_once(self, collector, monkeypatch):
+        monkeypatch.setattr('binance_collector.BinanceCollector.get_usdt_symbols', AsyncMock(return_value=["BTCUSDT"]))
+        collector.hyperliquid = MagicMock()
+        collector.hyperliquid.get_universe_symbols = AsyncMock(return_value=["HYPEUSDT"])
+        collector.okx = MagicMock()
+        collector.okx.get_swap_symbols = AsyncMock(return_value=["ZECUSDT"])
+
+        with patch("market_data_collector.logger.info") as mock_info:
+            first = await collector.get_usdt_symbols()
+            second = await collector.get_usdt_symbols()
+
+        assert set(first) == {"BTCUSDT", "HYPEUSDT", "ZECUSDT"}
+        assert set(second) == {"BTCUSDT", "HYPEUSDT", "ZECUSDT"}
+
+        hyper_calls = [call for call in mock_info.call_args_list if call.args[1] == "Hyperliquid" and call.args[3] == "symbols"]
+        okx_calls = [call for call in mock_info.call_args_list if call.args[1] == "Okx" and call.args[3] == "symbols"]
+        assert len(hyper_calls) == 1
+        assert len(okx_calls) == 1

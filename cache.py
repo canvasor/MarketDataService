@@ -53,6 +53,7 @@ class APICache:
     KEY_AI500_SHORT = "ai500_short"
     KEY_AI500_LONG = "ai500_long"
     KEY_OI_TOP = "oi_top"
+    KEY_SYSTEM_STATUS = "system_status"
     KEY_COIN_PREFIX = "coin_"
 
     def __init__(self, default_ttl: float = 1800):
@@ -130,6 +131,12 @@ class APICache:
         """清空所有缓存"""
         with self._lock:
             self._cache.clear()
+
+    def record_warmup(self, timestamp: Optional[float] = None) -> None:
+        """记录一次缓存预热。"""
+        with self._lock:
+            self._stats["warmups"] += 1
+            self._stats["last_warmup"] = timestamp if timestamp is not None else time.time()
 
     def get_coin_key(self, symbol: str) -> str:
         """获取币种缓存键"""

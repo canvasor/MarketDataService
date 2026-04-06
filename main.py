@@ -82,6 +82,37 @@ def build_cache_warmup_metadata() -> Dict[str, Any]:
     }
 
 
+def build_health_checks(provider_status: Dict[str, Any]) -> Dict[str, Any]:
+    degraded_providers: List[str] = []
+    for provider, info in provider_status.items():
+        if not isinstance(info, dict):
+            continue
+        if info.get("enabled", True) and int(info.get("errors") or 0) > 0 and int(info.get("last_success") or 0) == 0:
+            degraded_providers.append(provider)
+
+    return {
+        "collector_initialized": collector is not None,
+        "provider_count": len(provider_status),
+        "degraded_providers": degraded_providers,
+    }
+
+
+async def build_system_status_payload() -> Dict[str, Any]:
+    cache = get_cache()
+    cached = cache.get(APICache.KEY_SYSTEM_STATUS)
+    if isinstance(cached, dict):
+        return cached
+
+    status = await collector.get_system_status() if collector else {}
+    if not isinstance(status, dict):
+        status = {"collector_status": status}
+    status["auth"] = build_auth_metadata(required=True)
+    status["cache_warmup"] = build_cache_warmup_metadata()
+    status["status_cache_ttl"] = settings.cache_ttl_ranking
+    cache.set(APICache.KEY_SYSTEM_STATUS, status, ttl=settings.cache_ttl_ranking)
+    return status
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """应用生命周期管理"""
@@ -1362,11 +1393,7 @@ async def get_heatmap_list(
 async def get_system_status(auth: str = Query(..., description="认证密钥")):
     if not verify_auth(auth):
         raise HTTPException(status_code=401, detail="认证失败")
-    status = await collector.get_system_status() if collector else {}
-    if not isinstance(status, dict):
-        status = {"collector_status": status}
-    status["auth"] = build_auth_metadata(required=True)
-    status["cache_warmup"] = build_cache_warmup_metadata()
+    status = await build_system_status_payload()
     return {"success": True, "data": status}
 
 
@@ -1470,14 +1497,16 @@ async def get_pair_neutral_context(
 async def health_check():
     """健康检查"""
     provider_status = collector.get_provider_status() if collector and hasattr(collector, "get_provider_status") else {}
+    checks = build_health_checks(provider_status)
     return {
-        "status": "healthy",
+        "status": "healthy" if checks["collector_initialized"] and not checks["degraded_providers"] else "degraded",
         "timestamp": int(time.time()),
         "providers": provider_status,
         "coingecko_api": settings.coingecko_api_key is not None,
         "cmc_api": settings.cmc_api_key is not None,
         "auth": build_auth_metadata(required=False),
         "cache_warmup": build_cache_warmup_metadata(),
+        "checks": checks,
     }
 
 

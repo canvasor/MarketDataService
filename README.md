@@ -79,6 +79,7 @@
 ### 最少建议设置
 ```bash
 NOFXOS_API_KEY=change_me_local_auth_key
+COINGECKO_API_ENDPOINT=https://api.coingecko.com/api/v3
 COINGECKO_API_KEY=...
 ```
 
@@ -128,10 +129,12 @@ python -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
 cp .env.example .env
-uvicorn main:app --host 0.0.0.0 --port 30007
+python main.py
 ```
 
 缓存预热默认每 5 分钟执行一次，触发时刻为每小时 `00/05/10/15/20/25/30/35/40/45/50/55` 分的 `30` 秒。
+
+也可以直接使用 `./start.sh`，脚本会优先复用 `.venv`，其次回退到 `venv`。
 
 ---
 
@@ -152,8 +155,8 @@ pytest -q
 - `/api/cache/status`
 
 其中：
-- `/health` 无鉴权，返回基础存活状态、认证来源说明和缓存预热节奏
-- `/api/system/status` 需要 `auth`，返回数据覆盖情况，并附带同样的认证与预热说明
+- `/health` 无鉴权，返回基础健康状态；当 collector 未初始化或 provider 只有错误没有成功时会返回 `degraded`
+- `/api/system/status` 需要 `auth`，返回数据覆盖情况，并附带同样的认证与预热说明；该接口会走一个短 TTL 内存缓存，适合低频监控
 
 ---
 

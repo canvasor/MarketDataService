@@ -5,6 +5,7 @@ cd "$(dirname "$0")"
 
 PID_FILE="server.pid"
 LOG_FILE="server.log"
+VENV_DIR=""
 
 # 检查是否已经在运行
 if [ -f "$PID_FILE" ]; then
@@ -19,15 +20,20 @@ if [ -f "$PID_FILE" ]; then
 fi
 
 # 检查虚拟环境
-if [ ! -d "venv" ]; then
+if [ -d ".venv" ]; then
+    VENV_DIR=".venv"
+elif [ -d "venv" ]; then
+    VENV_DIR="venv"
+else
+    VENV_DIR=".venv"
     echo "创建虚拟环境..."
-    python3 -m venv venv
-    source venv/bin/activate
+    python3 -m venv "$VENV_DIR"
+    source "$VENV_DIR/bin/activate"
     pip install -r requirements.txt
     pip install pydantic-settings
-else
-    source venv/bin/activate
 fi
+
+source "$VENV_DIR/bin/activate"
 
 # 启动服务器（后台运行）
 echo "启动 NOFX 本地数据服务器..."

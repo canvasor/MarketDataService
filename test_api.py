@@ -138,6 +138,16 @@ class TestHealthEndpoint:
         assert data["cache_warmup"]["second_offset"] == 30
         assert data["cache_warmup"]["minutes"] == [0, 5, 10, 15, 20, 25, 30, 35, 40, 45, 50, 55]
 
+    def test_health_check_is_degraded_when_collector_is_missing(self, client):
+        main.collector = None
+
+        response = client.get("/health")
+
+        assert response.status_code == 200
+        data = response.json()
+        assert data["status"] == "degraded"
+        assert data["checks"]["collector_initialized"] is False
+
 
 class TestRootEndpoint:
     """测试根路径端点"""
@@ -290,6 +300,20 @@ class TestSystemStatusEndpoint:
         assert data["data"]["exchange"] == "ok"
         assert data["data"]["auth"]["env_keys"] == ["NOFXOS_API_KEY", "NOFX_LOCAL_AUTH_KEY"]
         assert data["data"]["cache_warmup"]["second_offset"] == 30
+
+    def test_system_status_uses_short_cache_to_avoid_repeated_collection(self, client):
+        from cache import init_cache
+
+        main.collector = MagicMock()
+        main.collector.get_system_status = AsyncMock(return_value={"exchange": "ok"})
+        init_cache()
+
+        first = client.get("/api/system/status", params={"auth": "cm_568c67eae410d912c54c"})
+        second = client.get("/api/system/status", params={"auth": "cm_568c67eae410d912c54c"})
+
+        assert first.status_code == 200
+        assert second.status_code == 200
+        assert main.collector.get_system_status.await_count == 1
 
 
 class TestCacheModels:

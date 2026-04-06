@@ -10,7 +10,7 @@ import logging
 import os
 import time
 from dataclasses import asdict
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Set, Tuple
 
 import aiohttp
 from cachetools import TTLCache
@@ -82,6 +82,7 @@ class UnifiedMarketCollector(BinanceCollector):
             "hyperliquid": {"enabled": hyperliquid_enabled, "last_success": 0, "errors": 0},
             "okx": {"enabled": okx_enabled, "last_success": 0, "errors": 0},
         }
+        self._provider_success_logs: Set[str] = set()
         self._snapshot_state: Dict[str, Any] = self._load_snapshot_state()
 
     async def close(self):
@@ -129,6 +130,13 @@ class UnifiedMarketCollector(BinanceCollector):
         self._provider_status.setdefault(provider, {"enabled": True, "last_success": 0, "errors": 0})
         self._provider_status[provider]["errors"] += 1
 
+    def _log_provider_success_once(self, provider: str, resource: str, count: int) -> None:
+        log_key = f"{provider}:{resource}"
+        if log_key in self._provider_success_logs:
+            return
+        self._provider_success_logs.add(log_key)
+        logger.info("%s market API connected, loaded %d %s", provider.capitalize(), count, resource)
+
     def get_provider_status(self) -> Dict[str, Any]:
         return self._provider_status
 
@@ -156,16 +164,20 @@ class UnifiedMarketCollector(BinanceCollector):
 
         if self.hyperliquid:
             try:
-                merged.update(await self.hyperliquid.get_universe_symbols())
+                hyper_symbols = await self.hyperliquid.get_universe_symbols()
+                merged.update(hyper_symbols)
                 self._mark_provider_success("hyperliquid")
+                self._log_provider_success_once("hyperliquid", "symbols", len(hyper_symbols))
             except Exception as exc:
                 logger.warning("获取 Hyperliquid symbols 失败: %s", exc)
                 self._mark_provider_error("hyperliquid")
 
         if self.okx:
             try:
-                merged.update(await self.okx.get_swap_symbols())
+                okx_symbols = await self.okx.get_swap_symbols()
+                merged.update(okx_symbols)
                 self._mark_provider_success("okx")
+                self._log_provider_success_once("okx", "symbols", len(okx_symbols))
             except Exception as exc:
                 logger.warning("获取 OKX symbols 失败: %s", exc)
                 self._mark_provider_error("okx")

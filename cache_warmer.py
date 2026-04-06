@@ -220,6 +220,7 @@ class CacheWarmer:
         result["duration_ms"] = round(duration, 2)
 
         self._last_warmup_time = time.time()
+        self.cache.record_warmup(self._last_warmup_time)
 
         logger.info(f"缓存预热完成，耗时 {duration:.0f}ms")
         logger.info("=" * 50)
