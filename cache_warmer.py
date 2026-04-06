@@ -4,8 +4,7 @@
 缓存预热模块
 
 定时预热机制:
-- 根据 nofx 策略调度（每小时的 01、16、31、46 分），在调用前 1 分钟预热
-- 预热时间点: 每小时的 00、15、30、45 分
+- 每 5 分钟调度一次，在每小时的 00、05、10 ... 55 分的第 30 秒触发
 - 预热接口: /api/ai500/list, /api/oi/top, /api/coin/{symbol}
 
 预热币种:
@@ -35,10 +34,18 @@ FIXED_WARMUP_COINS = [
     "ADAUSDT", "LTCUSDT", "BCHUSDT", "LINKUSDT", "ZECUSDT"
 ]
 
-# 预热时间点（分钟）：00, 15, 30, 45
-# 注意：实际预热在这些分钟的第 10 秒开始，确保 K 线数据已更新
-WARMUP_MINUTES = [0, 15, 30, 45]
-WARMUP_SECONDS_OFFSET = 10  # 在整点后 10 秒开始预热
+# 预热时间点（分钟）：00, 05, 10 ... 55
+# 注意：实际预热在这些分钟的第 30 秒开始，确保 K 线数据已更新
+WARMUP_MINUTES = list(range(0, 60, 5))
+WARMUP_SECONDS_OFFSET = 30
+
+
+def get_warmup_schedule() -> dict:
+    return {
+        "minutes": list(WARMUP_MINUTES),
+        "second_offset": WARMUP_SECONDS_OFFSET,
+        "description": "every 5 minutes at second 30",
+    }
 
 
 class CacheWarmer:
@@ -46,7 +53,7 @@ class CacheWarmer:
     缓存预热器
 
     在策略调用前预热数据:
-    1. 每 15 分钟的第 0 分钟执行预热
+    1. 每 5 分钟执行一次预热
     2. 预热 ai500/list、oi/top 和指定币种数据
     3. 数据缓存 15-30 分钟
     """

@@ -78,9 +78,17 @@
 
 ### 最少建议设置
 ```bash
-NOFX_LOCAL_AUTH_KEY=change_me_local_auth_key
+NOFXOS_API_KEY=change_me_local_auth_key
 COINGECKO_API_KEY=...
 ```
+
+兼容旧变量：
+
+```bash
+NOFX_LOCAL_AUTH_KEY=change_me_local_auth_key
+```
+
+业务接口通过查询参数 `auth=...` 鉴权；服务会优先从 `NOFXOS_API_KEY` 读取认证密钥，其次回退到 `NOFX_LOCAL_AUTH_KEY`。
 
 ### 可选
 ```bash
@@ -123,6 +131,8 @@ cp .env.example .env
 uvicorn main:app --host 0.0.0.0 --port 30007
 ```
 
+缓存预热默认每 5 分钟执行一次，触发时刻为每小时 `00/05/10/15/20/25/30/35/40/45/50/55` 分的 `30` 秒。
+
 ---
 
 ## 测试
@@ -140,6 +150,10 @@ pytest -q
 - `/api/system/provider-usage`
 - `/api/system/nofx-compatibility`
 - `/api/cache/status`
+
+其中：
+- `/health` 无鉴权，返回基础存活状态、认证来源说明和缓存预热节奏
+- `/api/system/status` 需要 `auth`，返回数据覆盖情况，并附带同样的认证与预热说明
 
 ---
 

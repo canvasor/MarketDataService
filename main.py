@@ -17,8 +17,9 @@ NOFX 本地数据服务器 - 主程序
 
 import asyncio
 import logging
+import os
 import time
-from typing import Dict, List, Optional
+from typing import Any, Dict, List, Optional
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, Query, HTTPException, Request
@@ -26,12 +27,12 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
-from config import settings
+from config import AUTH_ENV_KEYS, settings
 from market_data_collector import UnifiedMarketCollector as BinanceCollector
 from cmc_collector import CMCCollector
 from coin_analyzer import CoinAnalyzer, CoinAnalysis, Direction
 from cache import APICache, init_cache, get_cache
-from cache_warmer import CacheWarmer
+from cache_warmer import CacheWarmer, get_warmup_schedule
 from nofx_mapping import build_mapping_summary
 from strategy_tools import (
     BACKTEST_FIELDS,
@@ -55,6 +56,30 @@ cmc_collector: Optional[CMCCollector] = None
 analyzer: Optional[CoinAnalyzer] = None
 cache_warmer: Optional[CacheWarmer] = None
 api_cache: Optional[APICache] = None
+
+
+def get_auth_source() -> str:
+    for env_key in AUTH_ENV_KEYS:
+        if os.getenv(env_key):
+            return env_key
+    return "default"
+
+
+def build_auth_metadata(required: bool) -> Dict[str, Any]:
+    return {
+        "required": required,
+        "query_param": "auth",
+        "env_keys": list(AUTH_ENV_KEYS),
+        "source": get_auth_source(),
+    }
+
+
+def build_cache_warmup_metadata() -> Dict[str, Any]:
+    return {
+        "enabled": settings.cache_warmup_enabled,
+        "ttl": settings.cache_warmup_ttl,
+        **get_warmup_schedule(),
+    }
 
 
 @asynccontextmanager
@@ -1337,7 +1362,11 @@ async def get_heatmap_list(
 async def get_system_status(auth: str = Query(..., description="认证密钥")):
     if not verify_auth(auth):
         raise HTTPException(status_code=401, detail="认证失败")
-    status = await collector.get_system_status()
+    status = await collector.get_system_status() if collector else {}
+    if not isinstance(status, dict):
+        status = {"collector_status": status}
+    status["auth"] = build_auth_metadata(required=True)
+    status["cache_warmup"] = build_cache_warmup_metadata()
     return {"success": True, "data": status}
 
 
@@ -1447,6 +1476,8 @@ async def health_check():
         "providers": provider_status,
         "coingecko_api": settings.coingecko_api_key is not None,
         "cmc_api": settings.cmc_api_key is not None,
+        "auth": build_auth_metadata(required=False),
+        "cache_warmup": build_cache_warmup_metadata(),
     }
 
 

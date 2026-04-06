@@ -24,6 +24,7 @@ with patch('main.BinanceCollector'), \
      patch('main.init_cache'), \
      patch('main.get_cache'):
 
+    import main
     from main import app, verify_auth, analysis_to_coin_info
     from coin_analyzer import CoinAnalysis, Direction
 
@@ -126,11 +127,16 @@ class TestHealthEndpoint:
 
     def test_health_check(self, client):
         """测试健康检查"""
+        main.collector = MagicMock()
+        main.collector.get_provider_status.return_value = {"binance": True}
         response = client.get("/health")
         assert response.status_code == 200
         data = response.json()
         assert data["status"] == "healthy"
         assert "timestamp" in data
+        assert data["auth"]["env_keys"] == ["NOFXOS_API_KEY", "NOFX_LOCAL_AUTH_KEY"]
+        assert data["cache_warmup"]["second_offset"] == 30
+        assert data["cache_warmup"]["minutes"] == [0, 5, 10, 15, 20, 25, 30, 35, 40, 45, 50, 55]
 
 
 class TestRootEndpoint:
@@ -265,6 +271,25 @@ class TestAPIAuthentication:
         """测试无效认证"""
         response = client.get("/api/analysis/short?auth=invalid")
         assert response.status_code == 401
+
+
+class TestSystemStatusEndpoint:
+    @pytest.fixture
+    def client(self):
+        return TestClient(app)
+
+    def test_system_status_includes_auth_and_cache_warmup_metadata(self, client):
+        main.collector = MagicMock()
+        main.collector.get_system_status = AsyncMock(return_value={"exchange": "ok"})
+
+        response = client.get("/api/system/status", params={"auth": "cm_568c67eae410d912c54c"})
+
+        assert response.status_code == 200
+        data = response.json()
+        assert data["success"] is True
+        assert data["data"]["exchange"] == "ok"
+        assert data["data"]["auth"]["env_keys"] == ["NOFXOS_API_KEY", "NOFX_LOCAL_AUTH_KEY"]
+        assert data["data"]["cache_warmup"]["second_offset"] == 30
 
 
 class TestCacheModels:

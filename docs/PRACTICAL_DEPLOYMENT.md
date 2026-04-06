@@ -3,6 +3,7 @@
 ## 推荐环境变量
 
 ```bash
+NOFXOS_API_KEY=change_me_local_auth_key
 NOFX_LOCAL_AUTH_KEY=change_me_local_auth_key
 COINGECKO_API_KEY=...
 CMC_PRO_API_KEY=...
@@ -14,6 +15,11 @@ OKX_API_PASSPHRASE=...
 ANALYSIS_UNIVERSE_MODE=fixed
 ANALYSIS_FIXED_SYMBOLS=BTCUSDT,ETHUSDT,SOLUSDT,BNBUSDT,HYPEUSDT,ZECUSDT
 ```
+
+说明：
+- 业务接口使用查询参数 `auth=...`
+- 服务优先读取 `NOFXOS_API_KEY`，其次读取 `NOFX_LOCAL_AUTH_KEY`
+- 缓存预热默认在每小时 `00/05/10/15/20/25/30/35/40/45/50/55` 分的 `30` 秒执行
 
 ## 关于固定币池
 

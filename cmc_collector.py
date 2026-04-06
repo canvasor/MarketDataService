@@ -96,7 +96,7 @@ class CMCCollector:
     ):
         self.api_endpoint = (api_endpoint or "https://pro-api.coinmarketcap.com").rstrip("/")
         self.api_key = api_key
-        self.coingecko_api_endpoint = coingecko_api_endpoint.rstrip("/")
+        self.coingecko_api_endpoint = self._normalize_coingecko_api_endpoint(coingecko_api_endpoint)
         self.coingecko_api_key = coingecko_api_key
         self.provider = provider
         self.session: Optional[aiohttp.ClientSession] = None
@@ -116,6 +116,13 @@ class CMCCollector:
                 "minute_limit": cmc_minute_soft_limit,
             },
         }
+
+    @staticmethod
+    def _normalize_coingecko_api_endpoint(endpoint: str) -> str:
+        normalized = endpoint.rstrip("/")
+        if normalized.endswith("/api"):
+            return f"{normalized}/v3"
+        return normalized
 
     @property
     def configured_providers(self) -> List[str]:

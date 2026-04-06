@@ -11,6 +11,9 @@ from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
+AUTH_ENV_KEYS = ("NOFXOS_API_KEY", "NOFX_LOCAL_AUTH_KEY")
+
+
 class Settings(BaseSettings):
     """服务器配置。"""
 
@@ -119,9 +122,10 @@ def load_settings() -> Settings:
     if os.getenv("ANALYSIS_FIXED_SYMBOLS"):
         settings.analysis_fixed_symbols = os.getenv("ANALYSIS_FIXED_SYMBOLS", settings.analysis_fixed_symbols)
 
-    # 兼容旧环境变量
-    if os.getenv("NOFX_LOCAL_AUTH_KEY"):
-        settings.auth_key = os.getenv("NOFX_LOCAL_AUTH_KEY", settings.auth_key)
+    for env_key in AUTH_ENV_KEYS:
+        if os.getenv(env_key):
+            settings.auth_key = os.getenv(env_key, settings.auth_key)
+            break
 
     return settings
 
