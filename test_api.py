@@ -34,7 +34,7 @@ class TestAuthVerification:
 
     def test_valid_auth(self):
         """测试有效认证"""
-        assert verify_auth("cm_568c67eae410d912c54c") is True
+        assert verify_auth(main.settings.auth_key) is True
 
     def test_invalid_auth(self):
         """测试无效认证"""
@@ -292,7 +292,7 @@ class TestSystemStatusEndpoint:
         main.collector = MagicMock()
         main.collector.get_system_status = AsyncMock(return_value={"exchange": "ok"})
 
-        response = client.get("/api/system/status", params={"auth": "cm_568c67eae410d912c54c"})
+        response = client.get("/api/system/status", params={"auth": main.settings.auth_key})
 
         assert response.status_code == 200
         data = response.json()
@@ -308,8 +308,8 @@ class TestSystemStatusEndpoint:
         main.collector.get_system_status = AsyncMock(return_value={"exchange": "ok"})
         init_cache()
 
-        first = client.get("/api/system/status", params={"auth": "cm_568c67eae410d912c54c"})
-        second = client.get("/api/system/status", params={"auth": "cm_568c67eae410d912c54c"})
+        first = client.get("/api/system/status", params={"auth": main.settings.auth_key})
+        second = client.get("/api/system/status", params={"auth": main.settings.auth_key})
 
         assert first.status_code == 200
         assert second.status_code == 200
@@ -386,14 +386,14 @@ class TestStrategyEndpoints:
         return TestClient(app)
 
     def test_strategy_universe_endpoint(self, client):
-        response = client.get('/api/system/strategy-universe', params={'auth': 'cm_568c67eae410d912c54c'})
+        response = client.get('/api/system/strategy-universe', params={'auth': main.settings.auth_key})
         assert response.status_code == 200
         data = response.json()
         assert data['success'] is True
         assert 'symbols' in data['data']
 
     def test_pair_template_endpoint(self, client):
-        response = client.get('/api/strategy/pair-neutral/template', params={'auth': 'cm_568c67eae410d912c54c'})
+        response = client.get('/api/strategy/pair-neutral/template', params={'auth': main.settings.auth_key})
         assert response.status_code == 200
         data = response.json()
         assert data['success'] is True

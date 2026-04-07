@@ -113,9 +113,9 @@ def load_settings() -> Settings:
     settings.hyperliquid_address = os.getenv("HYPERLIQUID_ADDRESS") or settings.hyperliquid_address
     settings.hyperliquid_private_key = os.getenv("HYPERLIQUID_PRIVATE_KEY") or settings.hyperliquid_private_key
 
-    settings.okx_api_key = os.getenv("OKX_API_KEY") or settings.okx_api_key
-    settings.okx_api_secret = os.getenv("OKX_API_SECRET") or settings.okx_api_secret
-    settings.okx_api_passphrase = os.getenv("OKX_API_PASSPHRASE") or settings.okx_api_passphrase
+    settings.okx_api_key = os.getenv("OKX_API_KEY_READONLY") or os.getenv("OKX_API_KEY") or settings.okx_api_key
+    settings.okx_api_secret = os.getenv("OKX_API_SECRET_READONLY") or os.getenv("OKX_API_SECRET") or settings.okx_api_secret
+    settings.okx_api_passphrase = os.getenv("OKX_API_PASSPHRASE_READONLY") or os.getenv("OKX_API_PASSPHRASE") or settings.okx_api_passphrase
 
     if os.getenv("ANALYSIS_UNIVERSE_MODE"):
         settings.analysis_universe_mode = os.getenv("ANALYSIS_UNIVERSE_MODE", settings.analysis_universe_mode)
