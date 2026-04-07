@@ -27,6 +27,10 @@ class Settings(BaseSettings):
     host: str = "127.0.0.1"
     port: int = 30007
     debug: bool = False
+    log_dir: str = "logs"
+    log_file: str = "market_data_service.log"
+    log_max_bytes: int = 10 * 1024 * 1024
+    log_backup_count: int = 5
 
     # 认证配置
     auth_key: str = "cm_568c67eae410d912c54c"

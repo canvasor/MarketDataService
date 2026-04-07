@@ -58,6 +58,7 @@ cover/
 
 # Django stuff:
 *.log
+*.pid
 local_settings.py
 db.sqlite3
 db.sqlite3-journal
@@ -208,3 +209,4 @@ marimo/_lsp/
 __marimo__/
 
 data/
+logs/

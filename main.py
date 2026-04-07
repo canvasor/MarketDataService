@@ -33,6 +33,7 @@ from cmc_collector import CMCCollector
 from coin_analyzer import CoinAnalyzer, CoinAnalysis, Direction
 from cache import APICache, init_cache, get_cache
 from cache_warmer import CacheWarmer, get_warmup_schedule
+from logging_utils import configure_logging
 from nofx_mapping import build_mapping_summary
 from strategy_tools import (
     BACKTEST_FIELDS,
@@ -43,10 +44,11 @@ from strategy_tools import (
     parse_fixed_symbols,
 )
 
-# 配置日志
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s [%(levelname)s] %(name)s: %(message)s"
+configure_logging(
+    log_dir=settings.log_dir,
+    log_filename=settings.log_file,
+    max_bytes=settings.log_max_bytes,
+    backup_count=settings.log_backup_count,
 )
 logger = logging.getLogger(__name__)
 

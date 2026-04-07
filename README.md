@@ -134,7 +134,14 @@ python main.py
 
 缓存预热默认每 5 分钟执行一次，触发时刻为每小时 `00/05/10/15/20/25/30/35/40/45/50/55` 分的 `30` 秒。
 
-也可以直接使用 `./start.sh`，脚本会优先复用 `.venv`，其次回退到 `venv`。
+也可以直接使用 `./scripts/start.sh`，脚本会优先复用 `.venv`，其次回退到 `venv`。
+
+脚本与日志约定：
+- 运维脚本位于 `scripts/`
+- PID 文件位于 `logs/server.pid`
+- 应用日志位于 `logs/market_data_service.log`
+- 后台运行输出位于 `logs/runtime.log`
+- 应用日志默认按大小滚动保存，单文件 10MB，保留 5 个备份
 
 ---
 
