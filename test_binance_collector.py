@@ -485,5 +485,86 @@ class TestCacheUsage:
         assert collector._kline_cache is not None
 
 
+class _FakeResponse:
+    def __init__(self, status, payload=None, text="", headers=None):
+        self.status = status
+        self._payload = payload or {}
+        self._text = text
+        self.headers = headers or {}
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, exc_type, exc, tb):
+        return False
+
+    async def json(self):
+        return self._payload
+
+    async def text(self):
+        return self._text
+
+
+class _FakeSession:
+    def __init__(self, responses):
+        self._responses = list(responses)
+        self.calls = 0
+
+    def get(self, url, params=None, timeout=None):
+        response = self._responses[self.calls]
+        self.calls += 1
+        return response
+
+
+class TestRateLimitProtection:
+    @pytest.fixture
+    def collector(self):
+        return BinanceCollector()
+
+    @pytest.mark.asyncio
+    async def test_request_retries_on_429_with_retry_after(self, collector):
+        session = _FakeSession([
+            _FakeResponse(429, text="too many requests", headers={"Retry-After": "1"}),
+            _FakeResponse(200, payload={"ok": True}),
+        ])
+
+        with patch.object(collector, "_get_session", AsyncMock(return_value=session)), \
+             patch("binance_collector.asyncio.sleep", new_callable=AsyncMock) as mock_sleep:
+            result = await collector._request("/fapi/v1/test")
+
+        assert result == {"ok": True}
+        assert session.calls == 2
+        assert any(call.args == (1.0,) for call in mock_sleep.await_args_list)
+
+    @pytest.mark.asyncio
+    async def test_request_sets_cooldown_on_418(self, collector):
+        session = _FakeSession([
+            _FakeResponse(418, text="banned"),
+        ])
+
+        with patch.object(collector, "_get_session", AsyncMock(return_value=session)), \
+             patch("binance_collector.time.monotonic", side_effect=[100.0, 100.0, 100.0, 100.0]):
+            result = await collector._request("/fapi/v1/test")
+
+        assert result == {}
+        assert collector._rate_limit_blocked_until == 100.0 + 900.0
+
+    @pytest.mark.asyncio
+    async def test_get_all_oi_uses_smaller_batches(self, collector, monkeypatch):
+        symbols = [f"S{i}USDT" for i in range(60)]
+        monkeypatch.setattr(collector, "get_usdt_symbols", AsyncMock(return_value=symbols))
+        monkeypatch.setattr(collector, "get_all_tickers", AsyncMock(return_value={}))
+        monkeypatch.setattr(collector, "_get_symbol_oi", AsyncMock(return_value=OIData(
+            symbol="BTCUSDT",
+            oi_value=1.0,
+            oi_coins=1.0,
+        )))
+
+        with patch("binance_collector.asyncio.sleep", new_callable=AsyncMock) as mock_sleep:
+            await collector.get_all_oi()
+
+        assert mock_sleep.await_count == 2
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])

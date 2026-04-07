@@ -74,6 +74,13 @@ class BinanceCollector:
     """Binance 数据采集器"""
 
     BASE_URL = "https://fapi.binance.com"
+    REQUEST_CONCURRENCY = 8
+    REQUEST_MIN_INTERVAL = 0.12
+    RATE_LIMIT_RETRY_LIMIT = 2
+    RATE_LIMIT_COOLDOWN_SECONDS = 900.0
+    RATE_LIMIT_RETRY_SECONDS = 2.0
+    OI_BATCH_SIZE = 25
+    OI_HISTORY_BATCH_SIZE = 5
 
     def __init__(self, api_key: Optional[str] = None, api_secret: Optional[str] = None):
         self.api_key = api_key
@@ -89,6 +96,10 @@ class BinanceCollector:
         # 所有 USDT 永续合约符号
         self._usdt_symbols: List[str] = []
         self._symbols_update_time: float = 0
+        self._request_semaphore = asyncio.Semaphore(self.REQUEST_CONCURRENCY)
+        self._request_pace_lock = asyncio.Lock()
+        self._next_request_time = 0.0
+        self._rate_limit_blocked_until = 0.0
 
     async def _get_session(self) -> aiohttp.ClientSession:
         """获取 HTTP 会话"""
@@ -104,28 +115,85 @@ class BinanceCollector:
         if self.session and not self.session.closed:
             await self.session.close()
 
+    @staticmethod
+    def _parse_retry_after(value: Optional[str], default: float) -> float:
+        if not value:
+            return default
+        try:
+            return max(float(value), 0.0)
+        except (TypeError, ValueError):
+            return default
+
     async def _request(self, endpoint: str, params: Optional[Dict] = None) -> Dict:
         """发送请求"""
         session = await self._get_session()
         url = f"{self.BASE_URL}{endpoint}"
 
-        try:
-            async with session.get(url, params=params, timeout=10) as resp:
-                if resp.status != 200:
-                    text = await resp.text()
-                    # -4108: Symbol is on delivering/settling/closed - 预期行为，降级为 debug
-                    if "-4108" in text:
-                        logger.debug(f"Binance API: symbol not available (settling/delivering): {params}")
-                    else:
-                        logger.error(f"Binance API error {resp.status}: {text}")
-                    return {}
-                return await resp.json()
-        except asyncio.TimeoutError:
-            logger.error(f"Binance API timeout: {endpoint}")
-            return {}
-        except Exception as e:
-            logger.error(f"Binance API error: {e}")
-            return {}
+        for attempt in range(self.RATE_LIMIT_RETRY_LIMIT + 1):
+            now = time.monotonic()
+            if self._rate_limit_blocked_until > now:
+                logger.warning(
+                    "Binance API cooldown active for %.1fs, skipping request: %s",
+                    self._rate_limit_blocked_until - now,
+                    endpoint,
+                )
+                return {}
+
+            try:
+                async with self._request_semaphore:
+                    async with self._request_pace_lock:
+                        now = time.monotonic()
+                        if self._rate_limit_blocked_until > now:
+                            logger.warning(
+                                "Binance API cooldown active for %.1fs, skipping request: %s",
+                                self._rate_limit_blocked_until - now,
+                                endpoint,
+                            )
+                            return {}
+                        wait_seconds = max(0.0, self._next_request_time - now)
+                        if wait_seconds > 0:
+                            await asyncio.sleep(wait_seconds)
+                        self._next_request_time = time.monotonic() + self.REQUEST_MIN_INTERVAL
+
+                    async with session.get(url, params=params, timeout=10) as resp:
+                        if resp.status == 200:
+                            return await resp.json()
+
+                        text = await resp.text()
+                        if resp.status == 429:
+                            retry_after = self._parse_retry_after(resp.headers.get("Retry-After"), self.RATE_LIMIT_RETRY_SECONDS)
+                            logger.warning(
+                                "Binance API rate limited on %s, retrying in %.1fs (attempt %d/%d)",
+                                endpoint,
+                                retry_after,
+                                attempt + 1,
+                                self.RATE_LIMIT_RETRY_LIMIT + 1,
+                            )
+                            if attempt < self.RATE_LIMIT_RETRY_LIMIT:
+                                await asyncio.sleep(retry_after)
+                                continue
+                            return {}
+
+                        if resp.status == 418:
+                            cooldown = self._parse_retry_after(resp.headers.get("Retry-After"), self.RATE_LIMIT_COOLDOWN_SECONDS)
+                            self._rate_limit_blocked_until = max(self._rate_limit_blocked_until, time.monotonic() + cooldown)
+                            logger.error("Binance API IP banned/cooldown %.1fs: %s", cooldown, endpoint)
+                            return {}
+
+                        # -4108: Symbol is on delivering/settling/closed - 预期行为，降级为 debug
+                        if "-4108" in text:
+                            logger.debug(f"Binance API: symbol not available (settling/delivering): {params}")
+                        else:
+                            logger.error(f"Binance API error {resp.status}: {text}")
+                        return {}
+            except asyncio.TimeoutError:
+                logger.error(f"Binance API timeout: {endpoint}")
+                return {}
+            except Exception as e:
+                logger.error(f"Binance API error: {e}")
+                return {}
+
+        return {}
 
     async def get_usdt_symbols(self, force_refresh: bool = False) -> List[str]:
         """获取所有 USDT 永续合约符号"""
@@ -323,7 +391,7 @@ class BinanceCollector:
         oi_data = {}
 
         # 并发获取 OI 数据（分批处理避免限流）
-        batch_size = 50
+        batch_size = self.OI_BATCH_SIZE
         for i in range(0, len(symbols), batch_size):
             batch = symbols[i:i+batch_size]
             tasks = [self._get_symbol_oi(s, tickers.get(s), with_history=False) for s in batch]
@@ -368,7 +436,7 @@ class BinanceCollector:
 
         # 为候选币种获取历史数据
         oi_with_history = []
-        batch_size = 10  # 历史数据请求较慢，减小批次
+        batch_size = self.OI_HISTORY_BATCH_SIZE
         symbols_to_fetch = [s for s, _ in sorted_oi]
 
         for i in range(0, len(symbols_to_fetch), batch_size):

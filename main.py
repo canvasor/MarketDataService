@@ -12,7 +12,7 @@ NOFX 本地数据服务器 - 主程序
 启动方式:
     python main.py
     或
-    uvicorn main:app --host 0.0.0.0 --port 30007 --reload
+    uvicorn main:app --host 127.0.0.1 --port 30007 --reload
 """
 
 import asyncio
