@@ -15,9 +15,9 @@ from typing import Any, Dict, List, Optional, Set, Tuple
 import aiohttp
 from cachetools import TTLCache
 
-from binance_collector import BinanceCollector, FundingData, OIData, TickerData
-from hyperliquid_collector import HyperliquidCollector
-from okx_collector import OKXCollector
+from collectors.binance_collector import BinanceCollector, FundingData, OIData, TickerData
+from collectors.hyperliquid_collector import HyperliquidCollector
+from collectors.okx_collector import OKXCollector
 
 logger = logging.getLogger(__name__)
 

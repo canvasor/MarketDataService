@@ -16,8 +16,8 @@ import asyncio
 from unittest.mock import AsyncMock, MagicMock, patch
 from dataclasses import dataclass
 
-from coin_analyzer import CoinAnalyzer, CoinAnalysis, Direction
-from binance_collector import BinanceCollector, TickerData, OIData, FundingData
+from analysis.coin_analyzer import CoinAnalyzer, CoinAnalysis, Direction
+from collectors.binance_collector import BinanceCollector, TickerData, OIData, FundingData
 
 
 class TestCoinAnalysis:

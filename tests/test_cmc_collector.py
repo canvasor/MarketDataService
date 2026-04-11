@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 
-from cmc_collector import CMCCollector
+from collectors.cmc_collector import CMCCollector
 
 
 def test_coingecko_endpoint_adds_v3_when_base_is_api():

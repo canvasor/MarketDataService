@@ -9,7 +9,7 @@ import statistics
 import time
 from typing import Any, Dict, List, Optional
 
-from config import settings
+from core.config import settings
 
 PAIR_TEMPLATE = {
     "strategy_id": "btc_eth_pair_neutral_v1",

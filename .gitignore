@@ -210,3 +210,6 @@ __marimo__/
 
 data/
 logs/
+
+# 重构备份文件
+main.py.bak

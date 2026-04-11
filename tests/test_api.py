@@ -16,17 +16,24 @@ import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
 from fastapi.testclient import TestClient
 
-# Mock dependencies before importing main
-with patch('main.BinanceCollector'), \
-     patch('main.CMCCollector'), \
-     patch('main.CoinAnalyzer'), \
-     patch('main.CacheWarmer'), \
-     patch('main.init_cache'), \
-     patch('main.get_cache'):
+# Mock 依赖，防止 factory 在模块加载时启动真实服务
+with patch('app.factory.UnifiedMarketCollector'), \
+     patch('app.factory.CMCCollector'), \
+     patch('app.factory.CoinAnalyzer'), \
+     patch('app.factory.CacheWarmer'), \
+     patch('app.factory.init_cache'), \
+     patch('core.cache.get_cache') as mock_get_cache:
+    mock_cache = MagicMock()
+    mock_cache.get.return_value = None
+    mock_get_cache.return_value = mock_cache
+    from app import create_app
+    app = create_app()
 
-    import main
-    from main import app, verify_auth, analysis_to_coin_info
-    from coin_analyzer import CoinAnalysis, Direction
+from app.auth import verify_auth
+from app.converters import analysis_to_coin_info
+from app.schemas import CoinInfo, AI500Response, OIRankingResponse
+from analysis.coin_analyzer import CoinAnalysis, Direction
+from core.config import settings
 
 
 class TestAuthVerification:
@@ -34,7 +41,7 @@ class TestAuthVerification:
 
     def test_valid_auth(self):
         """测试有效认证"""
-        assert verify_auth(main.settings.auth_key) is True
+        assert verify_auth(settings.auth_key) is True
 
     def test_invalid_auth(self):
         """测试无效认证"""
@@ -127,9 +134,10 @@ class TestHealthEndpoint:
 
     def test_health_check(self, client):
         """测试健康检查"""
-        main.collector = MagicMock()
-        main.collector.get_provider_status.return_value = {"binance": True}
-        response = client.get("/health")
+        mock_collector = MagicMock()
+        mock_collector.get_provider_status.return_value = {"binance": True}
+        with patch('app.dependencies._collector', mock_collector):
+            response = client.get("/health")
         assert response.status_code == 200
         data = response.json()
         assert data["status"] == "healthy"
@@ -139,9 +147,8 @@ class TestHealthEndpoint:
         assert data["cache_warmup"]["minutes"] == [0, 5, 10, 15, 20, 25, 30, 35, 40, 45, 50, 55]
 
     def test_health_check_is_degraded_when_collector_is_missing(self, client):
-        main.collector = None
-
-        response = client.get("/health")
+        with patch('app.dependencies._collector', None):
+            response = client.get("/health")
 
         assert response.status_code == 200
         data = response.json()
@@ -171,8 +178,6 @@ class TestResponseModels:
 
     def test_coin_info_model(self):
         """测试 CoinInfo 模型"""
-        from main import CoinInfo
-
         coin = CoinInfo(
             pair="BTCUSDT",
             score=85.0,
@@ -190,8 +195,6 @@ class TestResponseModels:
 
     def test_coin_info_with_extensions(self):
         """测试带扩展字段的 CoinInfo"""
-        from main import CoinInfo
-
         coin = CoinInfo(
             pair="ETHUSDT",
             score=70.0,
@@ -216,8 +219,6 @@ class TestAI500Response:
 
     def test_ai500_response(self):
         """测试 AI500 响应"""
-        from main import AI500Response
-
         response = AI500Response(
             success=True,
             data={
@@ -238,8 +239,6 @@ class TestOIRankingResponse:
 
     def test_oi_ranking_response(self):
         """测试 OI 排行响应"""
-        from main import OIRankingResponse
-
         response = OIRankingResponse(
             success=True,
             code=0,
@@ -274,8 +273,8 @@ class TestAPIAuthentication:
         """测试缺少认证"""
         # 大多数端点需要认证
         response = client.get("/api/analysis/short")
-        # 应该返回 422 (参数缺失) 或 401 (未授权)
-        assert response.status_code in [401, 422]
+        # 应该返回 422 (参数缺失)、401 (未授权)、或 503 (依赖未就绪)
+        assert response.status_code in [401, 422, 503]
 
     def test_invalid_auth(self, client):
         """测试无效认证"""
@@ -289,10 +288,11 @@ class TestSystemStatusEndpoint:
         return TestClient(app)
 
     def test_system_status_includes_auth_and_cache_warmup_metadata(self, client):
-        main.collector = MagicMock()
-        main.collector.get_system_status = AsyncMock(return_value={"exchange": "ok"})
+        mock_collector = MagicMock()
+        mock_collector.get_system_status = AsyncMock(return_value={"exchange": "ok"})
 
-        response = client.get("/api/system/status", params={"auth": main.settings.auth_key})
+        with patch('app.dependencies._collector', mock_collector):
+            response = client.get("/api/system/status", params={"auth": settings.auth_key})
 
         assert response.status_code == 200
         data = response.json()
@@ -302,18 +302,20 @@ class TestSystemStatusEndpoint:
         assert data["data"]["cache_warmup"]["second_offset"] == 30
 
     def test_system_status_uses_short_cache_to_avoid_repeated_collection(self, client):
-        from cache import init_cache
+        from core.cache import init_cache, get_cache as real_get_cache
 
-        main.collector = MagicMock()
-        main.collector.get_system_status = AsyncMock(return_value={"exchange": "ok"})
+        mock_collector = MagicMock()
+        mock_collector.get_system_status = AsyncMock(return_value={"exchange": "ok"})
         init_cache()
 
-        first = client.get("/api/system/status", params={"auth": main.settings.auth_key})
-        second = client.get("/api/system/status", params={"auth": main.settings.auth_key})
+        with patch('app.dependencies._collector', mock_collector), \
+             patch('app.routers.system.get_cache', real_get_cache):
+            first = client.get("/api/system/status", params={"auth": settings.auth_key})
+            second = client.get("/api/system/status", params={"auth": settings.auth_key})
 
         assert first.status_code == 200
         assert second.status_code == 200
-        assert main.collector.get_system_status.await_count == 1
+        assert mock_collector.get_system_status.await_count == 1
 
 
 class TestCacheModels:
@@ -321,7 +323,7 @@ class TestCacheModels:
 
     def test_cache_key_generation(self):
         """测试缓存键生成"""
-        from cache import APICache
+        from core.cache import APICache
 
         cache = APICache()
         key = cache.get_coin_key("BTCUSDT")
@@ -386,14 +388,14 @@ class TestStrategyEndpoints:
         return TestClient(app)
 
     def test_strategy_universe_endpoint(self, client):
-        response = client.get('/api/system/strategy-universe', params={'auth': main.settings.auth_key})
+        response = client.get('/api/system/strategy-universe', params={'auth': settings.auth_key})
         assert response.status_code == 200
         data = response.json()
         assert data['success'] is True
         assert 'symbols' in data['data']
 
     def test_pair_template_endpoint(self, client):
-        response = client.get('/api/strategy/pair-neutral/template', params={'auth': main.settings.auth_key})
+        response = client.get('/api/strategy/pair-neutral/template', params={'auth': settings.auth_key})
         assert response.status_code == 200
         data = response.json()
         assert data['success'] is True

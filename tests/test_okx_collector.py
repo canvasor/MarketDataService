@@ -5,7 +5,7 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-from okx_collector import OKXCollector
+from collectors.okx_collector import OKXCollector
 
 
 def test_symbol_conversion():

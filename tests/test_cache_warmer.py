@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 
-from cache_warmer import get_warmup_schedule
+from core.cache_warmer import get_warmup_schedule
 
 
 def test_warmup_schedule_uses_every_five_minutes_at_30_seconds():

@@ -18,7 +18,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 from datetime import datetime
 import time
 
-from binance_collector import (
+from collectors.binance_collector import (
     BinanceCollector,
     TickerData,
     OIData,
@@ -529,7 +529,7 @@ class TestRateLimitProtection:
         ])
 
         with patch.object(collector, "_get_session", AsyncMock(return_value=session)), \
-             patch("binance_collector.asyncio.sleep", new_callable=AsyncMock) as mock_sleep:
+             patch("collectors.binance_collector.asyncio.sleep", new_callable=AsyncMock) as mock_sleep:
             result = await collector._request("/fapi/v1/test")
 
         assert result == {"ok": True}
@@ -543,7 +543,7 @@ class TestRateLimitProtection:
         ])
 
         with patch.object(collector, "_get_session", AsyncMock(return_value=session)), \
-             patch("binance_collector.time.monotonic", side_effect=[100.0, 100.0, 100.0, 100.0]):
+             patch("collectors.binance_collector.time.monotonic", side_effect=[100.0, 100.0, 100.0, 100.0]):
             result = await collector._request("/fapi/v1/test")
 
         assert result == {}
@@ -560,7 +560,7 @@ class TestRateLimitProtection:
             oi_coins=1.0,
         )))
 
-        with patch("binance_collector.asyncio.sleep", new_callable=AsyncMock) as mock_sleep:
+        with patch("collectors.binance_collector.asyncio.sleep", new_callable=AsyncMock) as mock_sleep:
             await collector.get_all_oi()
 
         assert mock_sleep.await_count == 2

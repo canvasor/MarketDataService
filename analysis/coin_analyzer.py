@@ -17,8 +17,8 @@ import time
 from typing import Dict, List, Optional, Set, Tuple
 from dataclasses import dataclass, field
 from enum import Enum
-from binance_collector import BinanceCollector, TickerData, OIData
-from config import settings
+from collectors.binance_collector import BinanceCollector, TickerData, OIData
+from core.config import settings
 
 logger = logging.getLogger(__name__)
 

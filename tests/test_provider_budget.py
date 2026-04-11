@@ -3,7 +3,7 @@
 
 from pathlib import Path
 
-from provider_budget import ProviderBudgetTracker
+from core.provider_budget import ProviderBudgetTracker
 
 
 def test_budget_tracker_attempt_and_success(tmp_path: Path):

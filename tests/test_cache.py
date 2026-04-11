@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 
-from cache import APICache
+from core.cache import APICache
 
 
 def test_record_warmup_updates_cache_stats():

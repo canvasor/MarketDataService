@@ -22,7 +22,7 @@ from typing import Any, Dict, List, Optional, Tuple
 import aiohttp
 from cachetools import TTLCache
 
-from provider_budget import ProviderBudgetTracker
+from core.provider_budget import ProviderBudgetTracker
 
 logger = logging.getLogger(__name__)
 

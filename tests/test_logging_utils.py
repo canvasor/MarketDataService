@@ -1,7 +1,7 @@
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
 
-from logging_utils import build_logging_handlers
+from core.logging_utils import build_logging_handlers
 
 
 def test_build_logging_handlers_uses_rotating_file_handler(tmp_path):

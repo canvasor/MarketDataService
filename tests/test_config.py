@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 
-from config import load_settings
+from core.config import load_settings
 
 
 def test_auth_key_prefers_nofxos_api_key(monkeypatch):

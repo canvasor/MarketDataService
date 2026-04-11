@@ -18,12 +18,12 @@ import time
 from datetime import datetime
 from typing import TYPE_CHECKING, List, Optional, Set
 
-from cache import APICache, get_cache
+from core.cache import APICache, get_cache
 
 if TYPE_CHECKING:
-    from binance_collector import BinanceCollector
-    from cmc_collector import CMCCollector
-    from coin_analyzer import CoinAnalyzer
+    from collectors.binance_collector import BinanceCollector
+    from collectors.cmc_collector import CMCCollector
+    from analysis.coin_analyzer import CoinAnalyzer
 
 logger = logging.getLogger(__name__)
 
@@ -306,7 +306,7 @@ class CacheWarmer:
             all_analysis = await self.analyzer.analyze_all()
 
             # 导入所需类型
-            from coin_analyzer import Direction
+            from analysis.coin_analyzer import Direction
 
             # 1. 预热 ai500/list（默认排序）
             coins_all = sorted(
