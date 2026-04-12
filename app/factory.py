@@ -58,6 +58,10 @@ async def lifespan(app: FastAPI):
         focus_symbols=parse_fixed_symbols(),
         universe_mode=settings.analysis_universe_mode,
     )
+    if settings.binance_api_key:
+        logger.info("Binance API key 已配置，使用认证模式（更高限流额度）")
+    else:
+        logger.warning("Binance API key 未配置，使用 IP 限流模式（较低额度）")
 
     # 初始化宏观数据采集器（优先 CoinGecko Demo，其次 CMC）
     cmc_collector = CMCCollector(

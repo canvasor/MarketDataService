@@ -68,10 +68,10 @@ class UnifiedMarketCollector(BinanceCollector):
         self.snapshot_file = snapshot_file
         self.focus_symbols = {s.upper().strip() for s in (focus_symbols or []) if s}
         self.universe_mode = (universe_mode or "fixed").lower()
-        self._spot_kline_cache: TTLCache = TTLCache(maxsize=1000, ttl=30)
-        self._price_ranking_cache: TTLCache = TTLCache(maxsize=50, ttl=20)
-        self._netflow_cache: TTLCache = TTLCache(maxsize=100, ttl=20)
-        self._heatmap_cache: TTLCache = TTLCache(maxsize=500, ttl=15)
+        self._spot_kline_cache: TTLCache = TTLCache(maxsize=1000, ttl=600)
+        self._price_ranking_cache: TTLCache = TTLCache(maxsize=50, ttl=600)
+        self._netflow_cache: TTLCache = TTLCache(maxsize=100, ttl=600)
+        self._heatmap_cache: TTLCache = TTLCache(maxsize=500, ttl=600)
         self._provider_status: Dict[str, Any] = {
             "binance": {"enabled": True, "last_success": 0, "errors": 0},
             "okx": {"enabled": okx_enabled, "last_success": 0, "errors": 0},

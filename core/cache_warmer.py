@@ -16,7 +16,7 @@ import asyncio
 import logging
 import time
 from datetime import datetime
-from typing import TYPE_CHECKING, List, Optional, Set
+from typing import TYPE_CHECKING, Dict, List, Optional, Set
 
 from core.cache import APICache, get_cache
 
@@ -195,7 +195,7 @@ class CacheWarmer:
 
         try:
             # 1. 预热 ai500/list、short、long
-            ai500_data, short_count, long_count = await self._warmup_ai500_all()
+            ai500_data, short_count, long_count, all_analyzed_symbols = await self._warmup_ai500_all()
             if ai500_data:
                 result["ai500_list"] = True
                 result["ai500_short"] = short_count > 0
@@ -204,23 +204,21 @@ class CacheWarmer:
             else:
                 result["errors"].append("ai500 预热失败")
 
-            # 2. 预热 oi/top 和 oi/low
-            oi_data = await self._warmup_oi_top()
-            if oi_data:
+            # 2. 预热 oi/top 和 oi/low（合并获取，共享历史数据请求）
+            oi_results = await self._warmup_oi_rankings()
+            if oi_results.get("top"):
                 result["oi_top"] = True
-                logger.info(f"✓ oi/top 预热成功，{len(oi_data.get('positions', []))} 个持仓")
+                logger.info(f"✓ oi/top 预热成功，{len(oi_results['top'].get('positions', []))} 个持仓")
             else:
                 result["errors"].append("oi/top 预热失败")
-
-            oi_low_data = await self._warmup_oi_low()
-            if oi_low_data:
+            if oi_results.get("low"):
                 result["oi_low"] = True
-                logger.info(f"✓ oi/low 预热成功，{len(oi_low_data.get('positions', []))} 个持仓")
+                logger.info(f"✓ oi/low 预热成功，{len(oi_results['low'].get('positions', []))} 个持仓")
             else:
                 result["errors"].append("oi/low 预热失败")
 
-            # 3. 预热币种数据
-            coins_to_warmup = await self._get_coins_to_warmup(ai500_data)
+            # 3. 预热币种数据（覆盖所有分析通过的币种）
+            coins_to_warmup = await self._get_coins_to_warmup(all_analyzed_symbols)
             warmed_coins = await self._warmup_coins(coins_to_warmup)
             result["coins"] = warmed_coins
             logger.info(f"✓ 币种数据预热成功，{len(warmed_coins)}/{len(coins_to_warmup)} 个")
@@ -357,11 +355,13 @@ class CacheWarmer:
             }
             self.cache.set(APICache.KEY_AI500_LONG, data_long, self.cache_ttl)
 
-            return data_list, len(short_candidates), len(long_candidates)
+            # 返回所有分析通过的币种符号，用于扩大预热范围
+            all_symbols = set(all_analysis.keys())
+            return data_list, len(short_candidates), len(long_candidates), all_symbols
 
         except Exception as e:
             logger.error(f"预热 ai500 失败: {e}")
-            return None, 0, 0
+            return None, 0, 0, set()
 
     async def _warmup_ai500_list(self) -> Optional[dict]:
         """预热 ai500/list 数据（保留兼容）"""
@@ -375,6 +375,50 @@ class CacheWarmer:
     async def _warmup_oi_low(self) -> Optional[dict]:
         """预热 oi/low 数据"""
         return await self._warmup_oi_ranking("low")
+
+    async def _warmup_oi_rankings(self) -> Dict[str, Optional[dict]]:
+        """一次性预热 oi/top 和 oi/low，共享历史数据获取"""
+        results = {"top": None, "low": None}
+        try:
+            rankings = await self.collector.warmup_oi_rankings(limit=20)
+            tickers = await self.collector.get_all_tickers()
+
+            for rank_type in ("top", "low"):
+                oi_list = rankings.get(rank_type, [])
+                cache_key = APICache.KEY_OI_TOP if rank_type == "top" else APICache.KEY_OI_LOW
+
+                positions = []
+                for i, oi in enumerate(oi_list):
+                    ticker = tickers.get(oi.symbol)
+                    price_change = ticker.price_change_24h if ticker else 0
+                    positions.append({
+                        "rank": i + 1,
+                        "symbol": oi.symbol,
+                        "current_oi": oi.oi_coins,
+                        "oi_delta": oi.oi_coins * (oi.oi_change_1h / 100) if oi.oi_change_1h else 0,
+                        "oi_delta_percent": oi.oi_change_1h,
+                        "oi_delta_value": oi.oi_delta_value_1h,
+                        "price_delta_percent": price_change,
+                        "net_long": 0,
+                        "net_short": 0
+                    })
+
+                data = {
+                    "positions": positions,
+                    "count": len(positions),
+                    "exchange": "binance",
+                    "rank_type": rank_type,
+                    "time_range": "1小时",
+                    "time_range_param": "1h",
+                    "limit": 20
+                }
+                self.cache.set(cache_key, data, self.cache_ttl)
+                results[rank_type] = data
+
+        except Exception as e:
+            logger.error(f"预热 oi rankings 失败: {e}")
+
+        return results
 
     async def _warmup_oi_ranking(self, rank_type: str) -> Optional[dict]:
         """预热 OI 排行数据"""
@@ -417,19 +461,13 @@ class CacheWarmer:
             logger.error(f"预热 oi/{rank_type} 失败: {e}")
             return None
 
-    async def _get_coins_to_warmup(self, ai500_data: Optional[dict]) -> Set[str]:
-        """获取需要预热的币种列表"""
+    async def _get_coins_to_warmup(self, analyzed_symbols: Set[str] = None) -> Set[str]:
+        """获取需要预热的币种列表（覆盖所有分析通过的币种）"""
         coins = set(FIXED_WARMUP_COINS)
 
-        # 添加 ai500/list 前 20 的币种
-        if ai500_data and "coins" in ai500_data:
-            for coin in ai500_data["coins"][:20]:
-                symbol = coin.get("pair", "")
-                if symbol:
-                    # 确保是 USDT 交易对
-                    if not symbol.endswith("USDT"):
-                        symbol = symbol + "USDT"
-                    coins.add(symbol)
+        # 添加所有分析通过的币种
+        if analyzed_symbols:
+            coins.update(analyzed_symbols)
 
         return coins
 
@@ -442,7 +480,7 @@ class CacheWarmer:
         funding_data = await self.collector.get_all_funding_rates()
 
         # 并发预热，分批处理避免限流
-        batch_size = 5
+        batch_size = 10
         symbol_list = list(symbols)
 
         for i in range(0, len(symbol_list), batch_size):
@@ -456,7 +494,7 @@ class CacheWarmer:
 
             # 避免限流
             if i + batch_size < len(symbol_list):
-                await asyncio.sleep(0.2)
+                await asyncio.sleep(0.1)
 
         return warmed
 
@@ -518,8 +556,9 @@ class CacheWarmer:
             if funding:
                 data["funding_rate"] = funding.funding_rate
 
-            # 缓存
-            cache_key = self.cache.get_coin_key(symbol)
+            # 缓存（使用与 fetch_coin_detail 一致的缓存键格式）
+            default_include = "netflow,oi,price"
+            cache_key = self.cache.get_coin_key(f"{symbol}:{default_include}")
             self.cache.set(cache_key, data, self.cache_ttl)
 
             return True

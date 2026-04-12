@@ -74,13 +74,13 @@ class BinanceCollector:
     """Binance 数据采集器"""
 
     BASE_URL = "https://fapi.binance.com"
-    REQUEST_CONCURRENCY = 8
-    REQUEST_MIN_INTERVAL = 0.12
+    REQUEST_CONCURRENCY = 15
+    REQUEST_MIN_INTERVAL = 0.05
     RATE_LIMIT_RETRY_LIMIT = 2
     RATE_LIMIT_COOLDOWN_SECONDS = 900.0
     RATE_LIMIT_RETRY_SECONDS = 2.0
     OI_BATCH_SIZE = 50
-    OI_HISTORY_BATCH_SIZE = 5
+    OI_HISTORY_BATCH_SIZE = 15
 
     def __init__(self, api_key: Optional[str] = None, api_secret: Optional[str] = None):
         self.api_key = api_key
@@ -90,8 +90,8 @@ class BinanceCollector:
         # 缓存
         self._ticker_cache: TTLCache = TTLCache(maxsize=500, ttl=5)
         self._oi_cache: TTLCache = TTLCache(maxsize=500, ttl=600)
-        self._funding_cache: TTLCache = TTLCache(maxsize=500, ttl=300)
-        self._kline_cache: TTLCache = TTLCache(maxsize=1000, ttl=60)
+        self._funding_cache: TTLCache = TTLCache(maxsize=500, ttl=600)
+        self._kline_cache: TTLCache = TTLCache(maxsize=1000, ttl=600)
 
         # 所有 USDT 永续合约符号
         self._usdt_symbols: List[str] = []
@@ -455,7 +455,7 @@ class BinanceCollector:
 
             # 避免限流
             if i + batch_size < len(symbols_to_fetch):
-                await asyncio.sleep(0.2)
+                await asyncio.sleep(0.1)
 
         # 根据类型排序
         if rank_type == "top":
@@ -468,6 +468,55 @@ class BinanceCollector:
         result = oi_with_history[:limit]
         self._oi_cache[cache_key] = result
         return result
+
+    async def warmup_oi_rankings(self, limit: int = 20) -> Dict[str, List[OIData]]:
+        """一次性预热 top 和 low OI 排行，共享历史数据获取，避免重复请求。
+
+        Returns:
+            {"top": [...], "low": [...]}
+        """
+        cache_key_top = f"oi_ranking_top_{limit}"
+        cache_key_low = f"oi_ranking_low_{limit}"
+
+        # 如果都已缓存直接返回
+        if cache_key_top in self._oi_cache and cache_key_low in self._oi_cache:
+            return {"top": self._oi_cache[cache_key_top], "low": self._oi_cache[cache_key_low]}
+
+        all_oi = await self.get_all_oi()
+        tickers = await self.get_all_tickers()
+
+        sorted_oi = sorted(
+            [(s, oi) for s, oi in all_oi.items() if oi.oi_value > 1_000_000],
+            key=lambda x: x[1].oi_value,
+            reverse=True
+        )[:100]
+
+        # 批量获取历史数据（只请求一次）
+        oi_with_history = []
+        batch_size = self.OI_HISTORY_BATCH_SIZE
+        symbols_to_fetch = [s for s, _ in sorted_oi]
+
+        for i in range(0, len(symbols_to_fetch), batch_size):
+            batch = symbols_to_fetch[i:i+batch_size]
+            tasks = [self._get_symbol_oi(s, tickers.get(s), with_history=True) for s in batch]
+            results = await asyncio.gather(*tasks, return_exceptions=True)
+            for r in results:
+                if isinstance(r, OIData):
+                    oi_with_history.append(r)
+            if i + batch_size < len(symbols_to_fetch):
+                await asyncio.sleep(0.1)
+
+        # 分别排序并缓存
+        top_sorted = sorted(oi_with_history, key=lambda x: x.oi_delta_value_1h, reverse=True)
+        low_sorted = sorted(oi_with_history, key=lambda x: x.oi_delta_value_1h)
+
+        top_result = top_sorted[:limit]
+        low_result = low_sorted[:limit]
+
+        self._oi_cache[cache_key_top] = top_result
+        self._oi_cache[cache_key_low] = low_result
+
+        return {"top": top_result, "low": low_result}
 
     async def _get_symbol_oi(self, symbol: str, ticker: Optional[TickerData] = None, with_history: bool = False) -> Optional[OIData]:
         """获取单个符号的 OI 数据
