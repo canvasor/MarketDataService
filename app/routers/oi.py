@@ -95,6 +95,20 @@ async def get_oi_low_ranking(
     collector: UnifiedMarketCollector = Depends(get_collector),
 ):
     """获取 OI 持仓减少排行（兼容官方接口）"""
+    # limit <= 20 且 duration=1h 时尝试从缓存获取
+    if limit <= 20 and duration == "1h":
+        cache = get_cache()
+        cached_data = cache.get(APICache.KEY_OI_LOW)
+        if cached_data:
+            logger.debug("oi/low-ranking 命中缓存")
+            if limit < len(cached_data.get("positions", [])):
+                result_data = cached_data.copy()
+                result_data["positions"] = cached_data["positions"][:limit]
+                result_data["count"] = limit
+                result_data["limit"] = limit
+                return OIRankingResponse(success=True, code=0, data=result_data)
+            return OIRankingResponse(success=True, code=0, data=cached_data)
+
     try:
         # 使用带历史数据的方法获取 OI 排行
         oi_list = await collector.get_oi_ranking_with_history(rank_type="low", limit=limit)

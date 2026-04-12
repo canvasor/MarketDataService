@@ -89,7 +89,7 @@ class BinanceCollector:
 
         # 缓存
         self._ticker_cache: TTLCache = TTLCache(maxsize=500, ttl=5)
-        self._oi_cache: TTLCache = TTLCache(maxsize=500, ttl=300)
+        self._oi_cache: TTLCache = TTLCache(maxsize=500, ttl=600)
         self._funding_cache: TTLCache = TTLCache(maxsize=500, ttl=300)
         self._kline_cache: TTLCache = TTLCache(maxsize=1000, ttl=60)
 
@@ -382,10 +382,10 @@ class BinanceCollector:
 
         return result
 
-    async def get_all_oi(self) -> Dict[str, OIData]:
+    async def get_all_oi(self, force_refresh: bool = False) -> Dict[str, OIData]:
         """获取所有合约持仓量（不含历史变化数据，用于快速扫描）"""
         cache_key = "all_oi"
-        if cache_key in self._oi_cache:
+        if not force_refresh and cache_key in self._oi_cache:
             return self._oi_cache[cache_key]
 
         # 实际上需要逐个获取

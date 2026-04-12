@@ -6,14 +6,13 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from collectors.binance_collector import OIData, TickerData
-from collectors.hyperliquid_collector import HyperliquidAssetContext
 from collectors.market_data_collector import UnifiedMarketCollector
 
 
 class TestUnifiedMarketCollector:
     @pytest.fixture
     def collector(self):
-        c = UnifiedMarketCollector(hyperliquid_enabled=False, snapshot_file="")
+        c = UnifiedMarketCollector(snapshot_file="")
         yield c
         import asyncio
         asyncio.run(c.close())
@@ -40,54 +39,7 @@ class TestUnifiedMarketCollector:
             mod.time.time = old_time
 
     @pytest.mark.asyncio
-    async def test_get_all_tickers_merges_hyperliquid(self, collector, monkeypatch):
-        binance_tickers = {
-            "BTCUSDT": TickerData(symbol="BTCUSDT", price=100000.0, volume_24h=1_000_000_000)
-        }
-        hyper_contexts = {
-            "HYPEUSDT": HyperliquidAssetContext(
-                symbol="HYPEUSDT",
-                coin="HYPE",
-                price=20.0,
-                funding_rate=0.0001,
-                open_interest=10_000.0,
-                oi_value_usd=200_000.0,
-                prev_day_price=18.0,
-                day_notional_volume=50_000_000.0,
-            )
-        }
-        monkeypatch.setattr('collectors.binance_collector.BinanceCollector.get_all_tickers', AsyncMock(return_value=binance_tickers))
-        collector.hyperliquid_enabled = True
-        collector.hyperliquid = MagicMock()
-        collector.hyperliquid.get_all_asset_contexts = AsyncMock(return_value=hyper_contexts)
-
-        result = await collector.get_all_tickers()
-        assert "BTCUSDT" in result
-        assert "HYPEUSDT" in result
-        assert result["HYPEUSDT"].price == 20.0
-        assert result["HYPEUSDT"].price_change_24h > 0
-
-    @pytest.mark.asyncio
-    async def test_get_exchange_oi_details(self, collector, monkeypatch):
-        collector.hyperliquid_enabled = True
-        collector.hyperliquid = MagicMock()
-        collector.hyperliquid.get_coin_context = AsyncMock(return_value=HyperliquidAssetContext(
-            symbol="ETHUSDT",
-            coin="ETH",
-            price=3000.0,
-            funding_rate=0.0002,
-            open_interest=5000.0,
-            oi_value_usd=15_000_000.0,
-            prev_day_price=2900.0,
-        ))
-        collector._snapshot_state = {
-            "hyperliquid_oi": {
-                "ETHUSDT": [
-                    {"ts": 1, "oi": 4500.0, "price": 2800.0},
-                    {"ts": 9999999999, "oi": 5000.0, "price": 3000.0},
-                ]
-            }
-        }
+    async def test_get_exchange_oi_details_binance(self, collector, monkeypatch):
         monkeypatch.setattr('collectors.binance_collector.BinanceCollector.get_usdt_symbols', AsyncMock(return_value=["ETHUSDT"]))
         monkeypatch.setattr('collectors.binance_collector.BinanceCollector.get_oi_with_history', AsyncMock(return_value=OIData(
             symbol="ETHUSDT",
@@ -97,19 +49,9 @@ class TestUnifiedMarketCollector:
             oi_delta_value_1h=600_000.0,
         )))
 
-        # force snapshot lookup to use binance baseline only for hyper delta calc
-        import collectors.market_data_collector as mod
-        old_time = mod.time.time
-        mod.time.time = lambda: 7200
-        try:
-            result = await collector.get_exchange_oi_details("ETHUSDT")
-        finally:
-            mod.time.time = old_time
-
+        result = await collector.get_exchange_oi_details("ETHUSDT")
         assert "binance" in result
-        assert "hyperliquid" in result
         assert result["binance"]["oi"] == 4000.0
-        assert result["hyperliquid"]["oi_value"] == 15_000_000.0
 
     @pytest.mark.asyncio
     async def test_get_flow_proxy_formula(self, collector, monkeypatch):
@@ -142,10 +84,8 @@ class TestUnifiedMarketCollector:
         assert result["ZECUSDT"].price == 30.0
 
     @pytest.mark.asyncio
-    async def test_get_usdt_symbols_logs_hyperliquid_and_okx_connection_once(self, collector, monkeypatch):
+    async def test_get_usdt_symbols_logs_okx_connection_once(self, collector, monkeypatch):
         monkeypatch.setattr('collectors.binance_collector.BinanceCollector.get_usdt_symbols', AsyncMock(return_value=["BTCUSDT"]))
-        collector.hyperliquid = MagicMock()
-        collector.hyperliquid.get_universe_symbols = AsyncMock(return_value=["HYPEUSDT"])
         collector.okx = MagicMock()
         collector.okx.get_swap_symbols = AsyncMock(return_value=["ZECUSDT"])
 
@@ -153,10 +93,8 @@ class TestUnifiedMarketCollector:
             first = await collector.get_usdt_symbols()
             second = await collector.get_usdt_symbols()
 
-        assert set(first) == {"BTCUSDT", "HYPEUSDT", "ZECUSDT"}
-        assert set(second) == {"BTCUSDT", "HYPEUSDT", "ZECUSDT"}
+        assert set(first) == {"BTCUSDT", "ZECUSDT"}
+        assert set(second) == {"BTCUSDT", "ZECUSDT"}
 
-        hyper_calls = [call for call in mock_info.call_args_list if call.args[1] == "Hyperliquid" and call.args[3] == "symbols"]
         okx_calls = [call for call in mock_info.call_args_list if call.args[1] == "Okx" and call.args[3] == "symbols"]
-        assert len(hyper_calls) == 1
         assert len(okx_calls) == 1

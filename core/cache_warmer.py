@@ -174,6 +174,12 @@ class CacheWarmer:
         logger.info("=" * 50)
         logger.info("开始缓存预热...")
 
+        # 预热开始时清除 collector 的 OI 缓存，确保拉取最新数据
+        self.collector._oi_cache.clear()
+        # 清除 analyzer 的分析缓存，确保基于最新数据重新分析
+        if self.analyzer:
+            self.analyzer._analysis_cache = None
+
         result = {
             "success": True,
             "timestamp": datetime.now().isoformat(),
@@ -181,6 +187,7 @@ class CacheWarmer:
             "ai500_short": False,
             "ai500_long": False,
             "oi_top": False,
+            "oi_low": False,
             "coins": [],
             "errors": [],
             "duration_ms": 0
@@ -197,13 +204,20 @@ class CacheWarmer:
             else:
                 result["errors"].append("ai500 预热失败")
 
-            # 2. 预热 oi/top
+            # 2. 预热 oi/top 和 oi/low
             oi_data = await self._warmup_oi_top()
             if oi_data:
                 result["oi_top"] = True
                 logger.info(f"✓ oi/top 预热成功，{len(oi_data.get('positions', []))} 个持仓")
             else:
                 result["errors"].append("oi/top 预热失败")
+
+            oi_low_data = await self._warmup_oi_low()
+            if oi_low_data:
+                result["oi_low"] = True
+                logger.info(f"✓ oi/low 预热成功，{len(oi_low_data.get('positions', []))} 个持仓")
+            else:
+                result["errors"].append("oi/low 预热失败")
 
             # 3. 预热币种数据
             coins_to_warmup = await self._get_coins_to_warmup(ai500_data)
@@ -356,9 +370,17 @@ class CacheWarmer:
 
     async def _warmup_oi_top(self) -> Optional[dict]:
         """预热 oi/top 数据"""
+        return await self._warmup_oi_ranking("top")
+
+    async def _warmup_oi_low(self) -> Optional[dict]:
+        """预热 oi/low 数据"""
+        return await self._warmup_oi_ranking("low")
+
+    async def _warmup_oi_ranking(self, rank_type: str) -> Optional[dict]:
+        """预热 OI 排行数据"""
+        cache_key = APICache.KEY_OI_TOP if rank_type == "top" else APICache.KEY_OI_LOW
         try:
-            # 获取 OI 排行
-            oi_list = await self.collector.get_oi_ranking_with_history(rank_type="top", limit=20)
+            oi_list = await self.collector.get_oi_ranking_with_history(rank_type=rank_type, limit=20)
             tickers = await self.collector.get_all_tickers()
 
             positions = []
@@ -382,18 +404,17 @@ class CacheWarmer:
                 "positions": positions,
                 "count": len(positions),
                 "exchange": "binance",
-                "rank_type": "top",
+                "rank_type": rank_type,
                 "time_range": "1小时",
                 "time_range_param": "1h",
                 "limit": 20
             }
 
-            # 缓存数据
-            self.cache.set(APICache.KEY_OI_TOP, data, self.cache_ttl)
+            self.cache.set(cache_key, data, self.cache_ttl)
             return data
 
         except Exception as e:
-            logger.error(f"预热 oi/top 失败: {e}")
+            logger.error(f"预热 oi/{rank_type} 失败: {e}")
             return None
 
     async def _get_coins_to_warmup(self, ai500_data: Optional[dict]) -> Set[str]:

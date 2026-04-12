@@ -53,6 +53,7 @@ class APICache:
     KEY_AI500_SHORT = "ai500_short"
     KEY_AI500_LONG = "ai500_long"
     KEY_OI_TOP = "oi_top"
+    KEY_OI_LOW = "oi_low"
     KEY_SYSTEM_STATUS = "system_status"
     KEY_COIN_PREFIX = "coin_"
 

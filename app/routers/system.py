@@ -94,7 +94,7 @@ async def root():
         "compatibility_mode": settings.compatibility_mode,
         "providers": {
             "binance": True,
-            "hyperliquid": settings.hyperliquid_enabled,
+            "okx": settings.okx_enabled,
             "coingecko": settings.coingecko_api_key is not None,
             "cmc": settings.cmc_api_key is not None,
         },
@@ -220,7 +220,7 @@ async def get_system_capabilities(
             "providers": {
                 "market_cap_provider": cmc_collector.active_provider,
                 "configured_macro_providers": cmc_collector.configured_providers,
-                "hyperliquid_enabled": settings.hyperliquid_enabled,
+                "okx_enabled": settings.okx_enabled,
             },
             "compatibility_summary": build_mapping_summary()["summary"],
             "timestamp": int(time.time()),

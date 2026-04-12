@@ -50,8 +50,6 @@ async def lifespan(app: FastAPI):
     collector = UnifiedMarketCollector(
         api_key=settings.binance_api_key,
         api_secret=settings.binance_api_secret,
-        hyperliquid_enabled=settings.hyperliquid_enabled,
-        hyperliquid_dex=settings.hyperliquid_dex,
         okx_enabled=settings.okx_enabled,
         okx_api_key=settings.okx_api_key,
         okx_api_secret=settings.okx_api_secret,
