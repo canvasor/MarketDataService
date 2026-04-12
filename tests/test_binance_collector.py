@@ -552,7 +552,7 @@ class TestRateLimitProtection:
     @pytest.mark.asyncio
     async def test_get_all_oi_uses_smaller_batches(self, collector, monkeypatch):
         symbols = [f"S{i}USDT" for i in range(60)]
-        monkeypatch.setattr(collector, "get_usdt_symbols", AsyncMock(return_value=symbols))
+        monkeypatch.setattr(collector, "_refresh_binance_symbols", AsyncMock(return_value=symbols))
         monkeypatch.setattr(collector, "get_all_tickers", AsyncMock(return_value={}))
         monkeypatch.setattr(collector, "_get_symbol_oi", AsyncMock(return_value=OIData(
             symbol="BTCUSDT",

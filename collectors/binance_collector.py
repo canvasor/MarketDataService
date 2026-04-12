@@ -184,7 +184,7 @@ class BinanceCollector:
                         if "-4108" in text:
                             logger.debug(f"Binance API: symbol not available (settling/delivering): {params}")
                         else:
-                            logger.error(f"Binance API error {resp.status}: {text}")
+                            logger.error(f"Binance API error {resp.status}: {text} (endpoint={endpoint}, params={params})")
                         return {}
             except asyncio.TimeoutError:
                 logger.error(f"Binance API timeout: {endpoint}")
@@ -195,8 +195,8 @@ class BinanceCollector:
 
         return {}
 
-    async def get_usdt_symbols(self, force_refresh: bool = False) -> List[str]:
-        """获取所有 USDT 永续合约符号"""
+    async def _refresh_binance_symbols(self, force_refresh: bool = False) -> List[str]:
+        """从 Binance exchangeInfo 刷新并缓存 USDT 永续合约列表（仅 Binance 自身的）"""
         now = time.time()
         if not force_refresh and self._usdt_symbols and (now - self._symbols_update_time < 3600):
             return self._usdt_symbols
@@ -217,6 +217,10 @@ class BinanceCollector:
         logger.info(f"Loaded {len(symbols)} USDT perpetual symbols from Binance")
         return symbols
 
+    async def get_usdt_symbols(self, force_refresh: bool = False) -> List[str]:
+        """获取所有 USDT 永续合约符号（子类可重写以合并多交易所）"""
+        return await self._refresh_binance_symbols(force_refresh=force_refresh)
+
     async def get_all_tickers(self) -> Dict[str, TickerData]:
         """获取所有合约 24h 行情"""
         cache_key = "all_tickers"
@@ -224,7 +228,7 @@ class BinanceCollector:
             return self._ticker_cache[cache_key]
 
         # 先获取有效的交易符号列表，过滤掉结算中/已下架的合约
-        valid_symbols = set(await self.get_usdt_symbols())
+        valid_symbols = set(await self._refresh_binance_symbols())
 
         data = await self._request("/fapi/v1/ticker/24hr")
         if not data:
@@ -385,7 +389,8 @@ class BinanceCollector:
             return self._oi_cache[cache_key]
 
         # 实际上需要逐个获取
-        symbols = await self.get_usdt_symbols()
+        # 只用 Binance 自己的 symbol 列表，避免把其他交易所的 symbol 发给 Binance API
+        symbols = await self._refresh_binance_symbols()
         tickers = await self.get_all_tickers()
 
         oi_data = {}
