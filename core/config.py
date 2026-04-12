@@ -52,6 +52,17 @@ class Settings(BaseSettings):
     okx_api_secret: Optional[str] = None
     okx_api_passphrase: Optional[str] = None
 
+    # ValueScan 数据源（主数据源，提供 AI 机会/风险币种和链上资金流）
+    vs_enabled: bool = True
+    vs_open_api_base_url: Optional[str] = None
+    vs_open_api_key: Optional[str] = None
+    vs_open_secret_key: Optional[str] = None
+    vs_monthly_point_limit: int = 50000
+    vs_minute_point_limit: int = 20
+    vs_warmup_interval_minutes: int = 10
+    vs_coin_trade_cache_ttl: int = 600
+    vs_token_list_cache_ttl: int = 86400
+
     # Market-cap / macro 数据源（优先 CoinGecko Demo，其次 CMC）
     market_data_provider: str = "auto"  # auto|coingecko|cmc|none
     coingecko_api_endpoint: str = "https://api.coingecko.com/api/v3"
@@ -120,6 +131,10 @@ def load_settings() -> Settings:
     settings.okx_api_key = os.getenv("OKX_API_KEY_READONLY") or os.getenv("OKX_API_KEY") or settings.okx_api_key
     settings.okx_api_secret = os.getenv("OKX_API_SECRET_READONLY") or os.getenv("OKX_API_SECRET") or settings.okx_api_secret
     settings.okx_api_passphrase = os.getenv("OKX_API_PASSPHRASE_READONLY") or os.getenv("OKX_API_PASSPHRASE") or settings.okx_api_passphrase
+
+    settings.vs_open_api_base_url = os.getenv("VS_OPEN_API_BASE_URL") or settings.vs_open_api_base_url
+    settings.vs_open_api_key = os.getenv("VS_OPEN_API_KEY") or settings.vs_open_api_key
+    settings.vs_open_secret_key = os.getenv("VS_OPEN_SECRET_KEY") or settings.vs_open_secret_key
 
     if os.getenv("ANALYSIS_UNIVERSE_MODE"):
         settings.analysis_universe_mode = os.getenv("ANALYSIS_UNIVERSE_MODE", settings.analysis_universe_mode)

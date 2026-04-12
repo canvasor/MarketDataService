@@ -63,9 +63,11 @@ class CacheWarmer:
         collector: "BinanceCollector",
         analyzer: "CoinAnalyzer",
         cmc_collector: Optional["CMCCollector"] = None,
+        vs_collector=None,
         cache: Optional[APICache] = None,
         cache_ttl: float = 1800,  # 30 分钟
         ai500_limit: int = 20,
+        vs_warmup_interval_minutes: int = 10,
     ):
         """
         初始化预热器
@@ -74,20 +76,25 @@ class CacheWarmer:
             collector: Binance 数据采集器
             analyzer: 币种分析器
             cmc_collector: CMC 采集器（可选）
+            vs_collector: ValueScan 采集器（可选，主数据源）
             cache: 缓存实例（可选，默认使用全局实例）
             cache_ttl: 缓存 TTL（秒）
             ai500_limit: ai500/list 返回数量
+            vs_warmup_interval_minutes: ValueScan 预热间隔（分钟）
         """
         self.collector = collector
         self.analyzer = analyzer
         self.cmc_collector = cmc_collector
+        self.vs_collector = vs_collector
         self.cache = cache or get_cache()
         self.cache_ttl = cache_ttl
         self.ai500_limit = ai500_limit
+        self.vs_warmup_interval_minutes = vs_warmup_interval_minutes
 
         self._running = False
         self._task: Optional[asyncio.Task] = None
         self._last_warmup_time: float = 0
+        self._last_vs_warmup_time: float = 0
 
     async def start(self) -> None:
         """启动预热调度"""
@@ -195,14 +202,34 @@ class CacheWarmer:
 
         try:
             # 1. 预热 ai500/list、short、long
-            ai500_data, short_count, long_count, all_analyzed_symbols = await self._warmup_ai500_all()
-            if ai500_data:
-                result["ai500_list"] = True
-                result["ai500_short"] = short_count > 0
-                result["ai500_long"] = long_count > 0
-                logger.info(f"✓ ai500 预热成功: list={len(ai500_data.get('coins', []))}, short={short_count}, long={long_count}")
-            else:
-                result["errors"].append("ai500 预热失败")
+            # 优先使用 ValueScan（每 vs_warmup_interval_minutes 执行一次）
+            vs_ai500_success = False
+            all_analyzed_symbols: Set[str] = set()
+            now_ts = time.time()
+            vs_interval = self.vs_warmup_interval_minutes * 60
+
+            if self.vs_collector and (now_ts - self._last_vs_warmup_time) >= vs_interval:
+                vs_result = await self._warmup_ai500_from_valuescan()
+                if vs_result:
+                    vs_ai500_success = True
+                    result["ai500_list"] = True
+                    result["ai500_short"] = True
+                    result["ai500_long"] = True
+                    result["ai500_source"] = "valuescan"
+                    coins = vs_result.get("coins", [])
+                    logger.info(f"✓ ai500 预热成功 (ValueScan): {len(coins)} coins")
+
+            if not vs_ai500_success:
+                # 回退到本地分析
+                ai500_data, short_count, long_count, all_analyzed_symbols = await self._warmup_ai500_all()
+                if ai500_data:
+                    result["ai500_list"] = True
+                    result["ai500_short"] = short_count > 0
+                    result["ai500_long"] = long_count > 0
+                    result["ai500_source"] = "local"
+                    logger.info(f"✓ ai500 预热成功 (本地): list={len(ai500_data.get('coins', []))}, short={short_count}, long={long_count}")
+                else:
+                    result["errors"].append("ai500 预热失败")
 
             # 2. 预热 oi/top 和 oi/low（合并获取，共享历史数据请求）
             oi_results = await self._warmup_oi_rankings()
@@ -306,6 +333,40 @@ class CacheWarmer:
             "suggested_stop_price": c.suggested_stop_price,
             "volatility_level": c.volatility_level,
         }
+
+    async def _warmup_ai500_from_valuescan(self) -> Optional[dict]:
+        """从 ValueScan 预热 AI500 数据（机会+风险币种列表）。"""
+        if not self.vs_collector or not self.vs_collector.is_available:
+            return None
+        if not self.vs_collector.can_afford(6):
+            logger.warning("ValueScan 预算不足（需 6 积分），跳过 AI500 预热")
+            return None
+
+        try:
+            chance_coins, risk_coins = await asyncio.gather(
+                self.vs_collector.get_chance_coins(),
+                self.vs_collector.get_risk_coins(),
+            )
+            if not chance_coins and not risk_coins:
+                logger.warning("ValueScan 机会/风险币种均为空")
+                return None
+
+            from app.converters import valuescan_to_ai500_list
+
+            data_balanced = valuescan_to_ai500_list(chance_coins or [], risk_coins or [], "balanced", self.ai500_limit)
+            data_long = valuescan_to_ai500_list(chance_coins or [], risk_coins or [], "long", self.ai500_limit)
+            data_short = valuescan_to_ai500_list(chance_coins or [], risk_coins or [], "short", self.ai500_limit)
+
+            self.cache.set(APICache.KEY_AI500_LIST, data_balanced, self.cache_ttl)
+            self.cache.set(APICache.KEY_AI500_LONG, data_long, self.cache_ttl)
+            self.cache.set(APICache.KEY_AI500_SHORT, data_short, self.cache_ttl)
+
+            self._last_vs_warmup_time = time.time()
+            return data_balanced
+
+        except Exception as e:
+            logger.error(f"ValueScan AI500 预热失败: {e}")
+            return None
 
     async def _warmup_ai500_all(self) -> tuple:
         """预热 ai500 所有方向的数据（list、short、long）"""

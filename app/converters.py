@@ -10,13 +10,14 @@
 import asyncio
 import logging
 import time
-from typing import Any, Dict, Optional, Set
+from typing import Any, Dict, List, Optional, Set
 
 from fastapi import HTTPException
 
 from analysis.coin_analyzer import CoinAnalyzer, CoinAnalysis, Direction
 from collectors.cmc_collector import CMCCollector
 from collectors.market_data_collector import UnifiedMarketCollector
+from collectors.valuescan_collector import ValueScanCollector
 from core.cache import APICache, get_cache
 from core.config import settings
 from app.schemas import CoinInfo
@@ -162,14 +163,196 @@ async def load_cmc_data_for_analyzer(
         logger.warning(f"加载 CMC 数据失败（不影响主流程）: {e}")
 
 
+# ---------------------------------------------------------------------------
+# ValueScan → 本地格式转换
+# ---------------------------------------------------------------------------
+
+def _parse_float(val: Any, default: float = 0.0) -> float:
+    """安全解析字符串/数字为 float。"""
+    if val is None:
+        return default
+    try:
+        return float(val)
+    except (ValueError, TypeError):
+        return default
+
+
+def _vs_coin_to_dict(coin: dict, direction: str) -> dict:
+    """将 ValueScan 机会/风险币种转换为 AI500 CoinInfo 兼容格式。"""
+    symbol = str(coin.get("symbol", "")).upper()
+    pair = f"{symbol}USDT"
+    price = _parse_float(coin.get("price"))
+    score = _parse_float(coin.get("score"))
+    cost = _parse_float(coin.get("cost"))
+    deviation = _parse_float(coin.get("deviation"))
+
+    # grade 1/2/3 → confidence 50/70/90
+    grade = int(coin.get("grade", 1)) if coin.get("grade") is not None else 1
+    confidence = {1: 50.0, 2: 70.0, 3: 90.0}.get(grade, 50.0)
+
+    # 构建 tags
+    tags = [f"DIRECTION:{direction.upper()}"]
+    if coin.get("alpha"):
+        tags.append("VS:alpha")
+    if coin.get("fomo"):
+        tags.append("VS:fomo")
+    bullish = _parse_float(coin.get("bullishRatio"))
+    if bullish > 0:
+        tags.append(f"VS:bullish_{bullish:.0f}%")
+
+    # 构建 reasons
+    reasons = []
+    if cost > 0:
+        reasons.append(f"主力成本 ${cost:.2f}")
+    if deviation:
+        reasons.append(f"价格偏离度 {deviation:.1f}%")
+    if direction == "long":
+        gains = _parse_float(coin.get("gains"))
+        if gains > 0:
+            reasons.append(f"推送后涨幅 {gains:.1f}%")
+    else:
+        declines = _parse_float(coin.get("declines"))
+        if declines > 0:
+            reasons.append(f"推送后跌幅 {declines:.1f}%")
+
+    now = int(time.time())
+    return {
+        "pair": pair,
+        "score": score,
+        "start_time": now,
+        "start_price": price,
+        "last_score": score,
+        "max_score": score,
+        "max_price": price,
+        "increase_percent": _parse_float(coin.get("gains")) if direction == "long" else 0.0,
+        "direction": direction,
+        "confidence": confidence,
+        "price": price,
+        "price_change_1h": 0.0,
+        "price_change_24h": 0.0,
+        "tags": tags,
+        "reasons": reasons,
+        "source": "valuescan",
+        "vs_cost": cost,
+        "vs_deviation": deviation,
+        "vs_grade": grade,
+    }
+
+
+def valuescan_to_ai500_list(
+    chance_coins: List[dict],
+    risk_coins: List[dict],
+    direction: Optional[str],
+    limit: int = 20,
+) -> dict:
+    """将 ValueScan 机会+风险币种列表转换为 AI500 响应格式。
+
+    Args:
+        chance_coins: getChanceCoinList 返回的币种列表（做多）
+        risk_coins: getRiskCoinList 返回的币种列表（做空）
+        direction: 筛选方向 long/short/balanced/all
+        limit: 返回数量
+    """
+    long_list = [_vs_coin_to_dict(c, "long") for c in (chance_coins or [])]
+    short_list = [_vs_coin_to_dict(c, "short") for c in (risk_coins or [])]
+
+    # 按 score 降序
+    long_list.sort(key=lambda x: x["score"], reverse=True)
+    short_list.sort(key=lambda x: x["score"], reverse=True)
+
+    if direction == "long":
+        result = long_list[:limit]
+    elif direction == "short":
+        result = short_list[:limit]
+    elif direction == "all":
+        combined = long_list + short_list
+        combined.sort(key=lambda x: x["score"], reverse=True)
+        result = combined[:limit]
+    else:
+        # balanced: 交替取多空（偶数各半，奇数空多一个）
+        result = []
+        li, si = 0, 0
+        while len(result) < limit and (li < len(long_list) or si < len(short_list)):
+            if li < len(long_list):
+                result.append(long_list[li])
+                li += 1
+            if len(result) < limit and si < len(short_list):
+                result.append(short_list[si])
+                si += 1
+
+    long_count = sum(1 for c in result if c.get("direction") == "long")
+    short_count = sum(1 for c in result if c.get("direction") == "short")
+
+    return {
+        "coins": result,
+        "count": len(result),
+        "direction": direction or "balanced",
+        "long_count": long_count,
+        "short_count": short_count,
+        "source": "valuescan",
+        "timestamp": int(time.time()),
+    }
+
+
+def valuescan_trade_to_netflow(trade_data: dict) -> dict:
+    """将 ValueScan getCoinTrade 响应转换为 /api/coin/ netflow 格式。"""
+    # 提取现货和合约列表
+    spot_list = trade_data.get("spotGoodsList") or []
+    contract_list = trade_data.get("contractList") or []
+
+    # 构建各周期的资金流 dict
+    def _build_flow_dict(items: list) -> dict:
+        flows = {}
+        for item in items:
+            tr = str(item.get("timeRange", "")).lower()
+            # 统一 timeRange 格式：m5→5m, m15→15m, H1→1h 等
+            if tr.startswith("m"):
+                tr = tr[1:] + "m"
+            elif tr.startswith("h"):
+                tr = tr[1:] + "h"
+            elif tr.startswith("d"):
+                tr = tr[1:] + "d"
+            inflow = _parse_float(item.get("tradeInflow"))
+            flows[tr] = inflow
+        return flows
+
+    future_flows = _build_flow_dict(contract_list)
+    spot_flows = _build_flow_dict(spot_list)
+
+    # 取 1h 的值作为主要汇总
+    future_1h = future_flows.get("1h", 0.0)
+    spot_1h = spot_flows.get("1h", 0.0)
+    total_1h = future_1h + spot_1h
+
+    return {
+        "institution": {
+            "future": future_flows,
+            "spot": spot_flows,
+        },
+        "personal": {
+            "future": {},
+            "spot": {},
+        },
+        "breakdown": {
+            "future_flow": future_1h,
+            "spot_flow": spot_1h,
+            "amount": total_1h,
+            "spot_max_accumulation": _parse_float(trade_data.get("spotMaxInflow")),
+            "contract_max_accumulation": _parse_float(trade_data.get("contractMaxInflow")),
+        },
+        "mode": "valuescan_fund_flow",
+    }
+
+
 async def fetch_coin_detail(
     symbol: str,
     include_items: Set[str],
     collector: UnifiedMarketCollector,
     analyzer: CoinAnalyzer,
     cmc_collector: CMCCollector,
+    vs_collector: Optional[ValueScanCollector] = None,
 ) -> Dict[str, Any]:
-    """获取单币综合数据（原 get_coin_data 的核心逻辑）。
+    """获取单币综合数据。
 
     参数:
         symbol: 标准化后的交易对名称（如 BTCUSDT）
@@ -177,6 +360,7 @@ async def fetch_coin_detail(
         collector: 行情采集器
         analyzer: 币种分析器
         cmc_collector: CMC 宏观数据采集器
+        vs_collector: ValueScan 采集器（主数据源，可选）
 
     返回:
         包含请求数据的字典
@@ -229,30 +413,42 @@ async def fetch_coin_detail(
                 }
 
     if "netflow" in include_items:
-        netflow = await collector.get_flow_proxy(symbol, duration="1h", trade="all")
-        future_flow = netflow.get("future_flow", 0.0)
-        spot_flow = netflow.get("spot_flow", 0.0)
-        total_flow = netflow.get("amount", future_flow + spot_flow)
-        data["netflow"] = {
-            # 尽量贴近官方字段
-            "institution": {
-                "1h": total_flow,
-                "future": {"1h": future_flow},
-                "spot": {"1h": spot_flow},
-            },
-            "personal": {
-                "1h": 0.0,
-                "future": {"1h": 0.0},
-                "spot": {"1h": 0.0},
-            },
-            # 本地额外字段，显式告知为代理模式
-            "breakdown": {
-                "future_flow": future_flow,
-                "spot_flow": spot_flow,
-                "amount": total_flow,
-            },
-            "mode": netflow.get("mode", "proxy_taker_imbalance"),
-        }
+        # 优先使用 ValueScan 真实资金流数据
+        vs_netflow = None
+        if vs_collector and vs_collector.is_available and vs_collector.can_afford(3):
+            try:
+                trade_data = await vs_collector.get_coin_trade(symbol)
+                if trade_data:
+                    vs_netflow = valuescan_trade_to_netflow(trade_data)
+            except Exception as e:
+                logger.warning(f"ValueScan getCoinTrade {symbol} 失败，回退: {e}")
+
+        if vs_netflow:
+            data["netflow"] = vs_netflow
+        else:
+            # 回退到 Binance taker imbalance 代理
+            netflow = await collector.get_flow_proxy(symbol, duration="1h", trade="all")
+            future_flow = netflow.get("future_flow", 0.0)
+            spot_flow = netflow.get("spot_flow", 0.0)
+            total_flow = netflow.get("amount", future_flow + spot_flow)
+            data["netflow"] = {
+                "institution": {
+                    "1h": total_flow,
+                    "future": {"1h": future_flow},
+                    "spot": {"1h": spot_flow},
+                },
+                "personal": {
+                    "1h": 0.0,
+                    "future": {"1h": 0.0},
+                    "spot": {"1h": 0.0},
+                },
+                "breakdown": {
+                    "future_flow": future_flow,
+                    "spot_flow": spot_flow,
+                    "amount": total_flow,
+                },
+                "mode": netflow.get("mode", "proxy_taker_imbalance"),
+            }
 
     funding_data = await collector.get_all_funding_rates()
     funding = funding_data.get(symbol)

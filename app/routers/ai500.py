@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """AI500 智能筛选路由。"""
 
+import asyncio
 import logging
 import time
 from typing import Optional
@@ -9,12 +10,13 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 
 from analysis.coin_analyzer import CoinAnalyzer, Direction
 from app.auth import require_auth
-from app.converters import analysis_to_coin_info, fetch_coin_detail, load_cmc_data_for_analyzer
-from app.dependencies import get_analyzer, get_cmc_collector, get_collector
+from app.converters import analysis_to_coin_info, fetch_coin_detail, load_cmc_data_for_analyzer, valuescan_to_ai500_list
+from app.dependencies import get_analyzer, get_cmc_collector, get_collector, get_vs_collector_optional
 from app.schemas import AI500Response
 from app.utils import normalize_symbol
 from collectors.cmc_collector import CMCCollector
 from collectors.market_data_collector import UnifiedMarketCollector
+from collectors.valuescan_collector import ValueScanCollector
 from core.cache import APICache, get_cache
 
 logger = logging.getLogger(__name__)
@@ -29,6 +31,7 @@ async def get_ai500_list(
     limit: int = Query(20, ge=1, le=100, description="返回数量"),
     analyzer: CoinAnalyzer = Depends(get_analyzer),
     cmc_collector: CMCCollector = Depends(get_cmc_collector),
+    vs_collector: Optional[ValueScanCollector] = Depends(get_vs_collector_optional),
 ):
     """
     获取智能筛选币种列表（兼容官方 AI500 接口）
@@ -66,6 +69,25 @@ async def get_ai500_list(
                     return AI500Response(success=True, data=result_data)
                 return AI500Response(success=True, data=cached_data)
 
+        # 尝试 ValueScan 主数据源
+        if vs_collector and vs_collector.is_available and vs_collector.can_afford(6):
+            try:
+                chance_coins, risk_coins = await asyncio.gather(
+                    vs_collector.get_chance_coins(),
+                    vs_collector.get_risk_coins(),
+                )
+                if chance_coins or risk_coins:
+                    data = valuescan_to_ai500_list(
+                        chance_coins or [], risk_coins or [],
+                        direction or "balanced", limit,
+                    )
+                    if cache_key:
+                        cache.set(cache_key, data)
+                    return AI500Response(success=True, data=data)
+            except Exception as e:
+                logger.warning(f"ValueScan AI500 获取失败，回退到本地分析: {e}")
+
+        # 回退到本地分析
         # 先加载 CMC 数据增强分析
         await load_cmc_data_for_analyzer(cmc_collector, analyzer)
 
@@ -115,6 +137,7 @@ async def get_ai500_symbol(
     collector: UnifiedMarketCollector = Depends(get_collector),
     analyzer: CoinAnalyzer = Depends(get_analyzer),
     cmc_collector: CMCCollector = Depends(get_cmc_collector),
+    vs_collector: Optional[ValueScanCollector] = Depends(get_vs_collector_optional),
 ):
     """获取单币 AI500 视图（本地拼装版）。"""
     symbol = normalize_symbol(symbol)
@@ -134,6 +157,7 @@ async def get_ai500_symbol(
         collector=collector,
         analyzer=analyzer,
         cmc_collector=cmc_collector,
+        vs_collector=vs_collector,
     )
 
     return {

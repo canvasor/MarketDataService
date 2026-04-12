@@ -112,21 +112,21 @@ class ProviderBudgetTracker:
                 "soft_blocked": bool(pstate.get("soft_blocked", False)),
             }
 
-    def record_attempt(self, provider: str) -> None:
+    def record_attempt(self, provider: str, count: int = 1) -> None:
         with self._lock:
             pstate = self._provider_state(provider)
             now = time.time()
             self._trim_minute_window(provider, now).append(now)
-            pstate["monthly_attempts"] = int(pstate.get("monthly_attempts", 0)) + 1
+            pstate["monthly_attempts"] = int(pstate.get("monthly_attempts", 0)) + count
             pstate["last_request_at"] = int(now)
             self._save()
 
-    def record_result(self, provider: str, success: bool, error: Optional[str] = None) -> None:
+    def record_result(self, provider: str, success: bool, error: Optional[str] = None, count: int = 1) -> None:
         with self._lock:
             pstate = self._provider_state(provider)
             now = int(time.time())
             if success:
-                pstate["monthly_success"] = int(pstate.get("monthly_success", 0)) + 1
+                pstate["monthly_success"] = int(pstate.get("monthly_success", 0)) + count
                 pstate["last_success_at"] = now
                 pstate["last_error"] = None
             else:

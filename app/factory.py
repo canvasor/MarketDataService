@@ -16,6 +16,7 @@ from app.exceptions import register_exception_handlers
 from app.routers import register_routers
 from collectors.market_data_collector import UnifiedMarketCollector
 from collectors.cmc_collector import CMCCollector
+from collectors.valuescan_collector import ValueScanCollector
 from analysis.coin_analyzer import CoinAnalyzer
 from core.cache import init_cache
 from core.cache_warmer import CacheWarmer
@@ -81,6 +82,27 @@ async def lifespan(app: FastAPI):
     else:
         logger.warning("未配置 CoinGecko Demo / CMC API，市值与全市场概览仅返回免费恐惧贪婪等基础数据")
 
+    # 初始化 ValueScan 主数据源
+    vs_collector = None
+    if settings.vs_enabled and settings.vs_open_api_key and settings.vs_open_secret_key:
+        vs_collector = ValueScanCollector(
+            base_url=settings.vs_open_api_base_url or "https://api.valuescan.io/api/open/v1",
+            api_key=settings.vs_open_api_key,
+            secret_key=settings.vs_open_secret_key,
+            budget_tracker=cmc_collector.budget_tracker,
+            monthly_point_limit=settings.vs_monthly_point_limit,
+            minute_point_limit=settings.vs_minute_point_limit,
+            coin_trade_cache_ttl=settings.vs_coin_trade_cache_ttl,
+            token_list_cache_ttl=settings.vs_token_list_cache_ttl,
+        )
+        try:
+            count = await vs_collector.refresh_token_map()
+            logger.info(f"ValueScan 主数据源已初始化，映射 {count} 个币种")
+        except Exception as e:
+            logger.warning(f"ValueScan token 映射加载失败（不影响启动）: {e}")
+    else:
+        logger.info("ValueScan 未配置或已禁用，使用本地分析作为 AI500 数据源")
+
     # 初始化分析器
     analyzer = CoinAnalyzer(collector)
 
@@ -98,9 +120,11 @@ async def lifespan(app: FastAPI):
             collector=collector,
             analyzer=analyzer,
             cmc_collector=cmc_collector,
+            vs_collector=vs_collector,
             cache=api_cache,
             cache_ttl=settings.cache_warmup_ttl,
             ai500_limit=20,
+            vs_warmup_interval_minutes=settings.vs_warmup_interval_minutes,
         )
         await cache_warmer.start()
         logger.info("缓存预热器已启动")
@@ -112,6 +136,7 @@ async def lifespan(app: FastAPI):
         analyzer=analyzer,
         api_cache=api_cache,
         cache_warmer=cache_warmer,
+        vs_collector=vs_collector,
     )
 
     logger.info(f"服务器启动完成，监听 {settings.host}:{settings.port}")
@@ -121,6 +146,8 @@ async def lifespan(app: FastAPI):
     # ---------- 清理 ----------
     if cache_warmer:
         await cache_warmer.stop()
+    if vs_collector:
+        await vs_collector.close()
     if collector:
         await collector.close()
     if cmc_collector:

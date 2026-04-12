@@ -4,15 +4,18 @@
 import logging
 import time
 
+from typing import Optional
+
 from fastapi import APIRouter, Depends, HTTPException, Query
 
 from analysis.coin_analyzer import CoinAnalyzer
 from app.auth import require_auth
 from app.converters import fetch_coin_detail
-from app.dependencies import get_analyzer, get_cmc_collector, get_collector
+from app.dependencies import get_analyzer, get_cmc_collector, get_collector, get_vs_collector_optional
 from app.utils import normalize_symbol
 from collectors.cmc_collector import CMCCollector
 from collectors.market_data_collector import UnifiedMarketCollector
+from collectors.valuescan_collector import ValueScanCollector
 
 logger = logging.getLogger(__name__)
 
@@ -27,6 +30,7 @@ async def get_coin_data(
     collector: UnifiedMarketCollector = Depends(get_collector),
     analyzer: CoinAnalyzer = Depends(get_analyzer),
     cmc_collector: CMCCollector = Depends(get_cmc_collector),
+    vs_collector: Optional[ValueScanCollector] = Depends(get_vs_collector_optional),
 ):
     """获取单个币种综合数据（兼容官方接口，支持多源 OI 与资金流代理）。"""
     symbol = normalize_symbol(symbol)
@@ -39,6 +43,7 @@ async def get_coin_data(
             collector=collector,
             analyzer=analyzer,
             cmc_collector=cmc_collector,
+            vs_collector=vs_collector,
         )
         return {"success": True, "data": data}
     except HTTPException:

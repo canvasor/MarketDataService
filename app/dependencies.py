@@ -8,6 +8,7 @@ from fastapi import HTTPException
 
 from collectors.market_data_collector import UnifiedMarketCollector
 from collectors.cmc_collector import CMCCollector
+from collectors.valuescan_collector import ValueScanCollector
 from analysis.coin_analyzer import CoinAnalyzer
 from core.cache_warmer import CacheWarmer
 from core.cache import APICache
@@ -17,6 +18,7 @@ logger = logging.getLogger(__name__)
 # 全局服务实例
 _collector: Optional[UnifiedMarketCollector] = None
 _cmc_collector: Optional[CMCCollector] = None
+_vs_collector: Optional[ValueScanCollector] = None
 _analyzer: Optional[CoinAnalyzer] = None
 _cache_warmer: Optional[CacheWarmer] = None
 _api_cache: Optional[APICache] = None
@@ -28,11 +30,13 @@ def init_services(
     analyzer: CoinAnalyzer,
     api_cache: APICache,
     cache_warmer: Optional[CacheWarmer] = None,
+    vs_collector: Optional[ValueScanCollector] = None,
 ):
     """在 lifespan 中调用，初始化所有服务实例"""
-    global _collector, _cmc_collector, _analyzer, _cache_warmer, _api_cache
+    global _collector, _cmc_collector, _vs_collector, _analyzer, _cache_warmer, _api_cache
     _collector = collector
     _cmc_collector = cmc_collector
+    _vs_collector = vs_collector
     _analyzer = analyzer
     _api_cache = api_cache
     _cache_warmer = cache_warmer
@@ -40,9 +44,10 @@ def init_services(
 
 def cleanup_services():
     """清理全局引用"""
-    global _collector, _cmc_collector, _analyzer, _cache_warmer, _api_cache
+    global _collector, _cmc_collector, _vs_collector, _analyzer, _cache_warmer, _api_cache
     _collector = None
     _cmc_collector = None
+    _vs_collector = None
     _analyzer = None
     _cache_warmer = None
     _api_cache = None
@@ -78,3 +83,14 @@ def get_cache_warmer() -> Optional[CacheWarmer]:
 
 def get_api_cache() -> Optional[APICache]:
     return _api_cache
+
+
+def get_vs_collector() -> ValueScanCollector:
+    if _vs_collector is None:
+        raise HTTPException(status_code=503, detail="ValueScan 采集器未就绪")
+    return _vs_collector
+
+
+def get_vs_collector_optional() -> Optional[ValueScanCollector]:
+    """可选注入：未配置时返回 None。"""
+    return _vs_collector
