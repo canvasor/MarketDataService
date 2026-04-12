@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 
+import threading
 from pathlib import Path
 
 from core.provider_budget import ProviderBudgetTracker
@@ -27,3 +28,32 @@ def test_budget_tracker_soft_block(tmp_path: Path):
     usage = tracker.get_provider_usage("cmc", minute_limit=5, monthly_soft_limit=10)
     assert usage["soft_blocked"] is True
     assert usage["last_error"] == "manual block"
+
+
+def test_budget_tracker_counts_weighted_attempts_in_minute_window(tmp_path: Path):
+    tracker = ProviderBudgetTracker(storage_path=str(tmp_path / "usage.json"))
+
+    tracker.record_attempt("valuescan", count=3)
+    usage = tracker.get_provider_usage("valuescan", minute_limit=5, monthly_soft_limit=10)
+
+    assert usage["monthly_attempts"] == 3
+    assert usage["minute_used"] == 3
+    assert tracker.can_attempt("valuescan", minute_limit=5, monthly_soft_limit=10, count=3)["allowed"] is False
+    assert tracker.can_attempt("valuescan", minute_limit=5, monthly_soft_limit=10, count=2)["allowed"] is True
+
+
+def test_budget_tracker_get_all_usage_does_not_deadlock(tmp_path: Path):
+    tracker = ProviderBudgetTracker(storage_path=str(tmp_path / "usage.json"))
+    result = {}
+
+    def worker() -> None:
+        result["data"] = tracker.get_all_usage(
+            {"coingecko": {"minute_limit": 5, "monthly_soft_limit": 10}}
+        )
+
+    thread = threading.Thread(target=worker, daemon=True)
+    thread.start()
+    thread.join(timeout=0.5)
+
+    assert not thread.is_alive()
+    assert result["data"]["providers"]["coingecko"]["minute_limit"] == 5

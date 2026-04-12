@@ -22,6 +22,11 @@ logger = logging.getLogger(__name__)
 router = APIRouter(tags=["market_data"])
 
 
+def _ensure_supported_netflow_type(netflow_type: str) -> None:
+    if netflow_type != "proxy":
+        raise HTTPException(status_code=400, detail="仅支持 type=proxy，institution/personal 暂未实现")
+
+
 @router.get("/api/coin/{symbol}")
 async def get_coin_data(
     symbol: str,
@@ -62,6 +67,7 @@ async def get_netflow_top_ranking(
     trade: str = Query("all", description="all/future/spot"),
     collector: UnifiedMarketCollector = Depends(get_collector),
 ):
+    _ensure_supported_netflow_type(type)
     rows = await collector.get_netflow_ranking(rank_type="top", duration=duration, limit=limit, trade=trade)
     return {
         "success": True,
@@ -86,6 +92,7 @@ async def get_netflow_low_ranking(
     trade: str = Query("all", description="all/future/spot"),
     collector: UnifiedMarketCollector = Depends(get_collector),
 ):
+    _ensure_supported_netflow_type(type)
     rows = await collector.get_netflow_ranking(rank_type="low", duration=duration, limit=limit, trade=trade)
     return {
         "success": True,

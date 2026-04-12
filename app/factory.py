@@ -20,7 +20,7 @@ from collectors.valuescan_collector import ValueScanCollector
 from analysis.coin_analyzer import CoinAnalyzer
 from core.cache import init_cache
 from core.cache_warmer import CacheWarmer
-from core.config import settings
+from core.config import settings, validate_runtime_settings
 from core.logging_utils import configure_logging
 from tools.strategy_tools import parse_fixed_symbols
 
@@ -41,6 +41,7 @@ logger = logging.getLogger(__name__)
 async def lifespan(app: FastAPI):
     """应用生命周期管理：初始化 -> yield -> 清理"""
 
+    validate_runtime_settings(settings)
     logger.info("正在启动本地数据服务器...")
 
     # 初始化缓存

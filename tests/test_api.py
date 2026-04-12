@@ -31,6 +31,7 @@ with patch('app.factory.UnifiedMarketCollector'), \
 
 from app.auth import verify_auth
 from app.converters import analysis_to_coin_info
+from app.dependencies import get_analyzer, get_cmc_collector, get_collector
 from app.schemas import CoinInfo, AI500Response, OIRankingResponse
 from analysis.coin_analyzer import CoinAnalysis, Direction
 from core.config import settings
@@ -171,6 +172,73 @@ class TestRootEndpoint:
         data = response.json()
         assert data["name"] == "NOFX Local Data Server"
         assert "endpoints" in data
+
+
+class TestAnalysisEndpoints:
+    """测试分析类端点"""
+
+    @pytest.fixture
+    def client(self):
+        return TestClient(app)
+
+    def test_high_volatility_passes_min_volatility_to_analyzer(self, client):
+        class StubAnalyzer:
+            async def get_high_volatility_coins(self, min_volatility, limit):
+                assert min_volatility == 12.0
+                assert limit == 5
+                return []
+
+        app.dependency_overrides[get_analyzer] = lambda: StubAnalyzer()
+        app.dependency_overrides[get_cmc_collector] = lambda: MagicMock(_pick_provider=lambda: "coingecko")
+
+        try:
+            response = client.get(
+                f"/api/analysis/high-volatility?auth={settings.auth_key}&min_volatility=12&limit=5"
+            )
+        finally:
+            app.dependency_overrides.clear()
+
+        assert response.status_code == 200
+        data = response.json()
+        assert data["data"]["min_volatility"] == 12.0
+
+
+class TestMarketDataEndpoints:
+    """测试行情类端点"""
+
+    @pytest.fixture
+    def client(self):
+        return TestClient(app)
+
+    def test_netflow_ranking_rejects_unsupported_type(self, client):
+        mock_collector = MagicMock()
+        mock_collector.get_netflow_ranking = AsyncMock(return_value=[])
+        app.dependency_overrides[get_collector] = lambda: mock_collector
+
+        try:
+            response = client.get(
+                f"/api/netflow/top-ranking?auth={settings.auth_key}&type=institution"
+            )
+        finally:
+            app.dependency_overrides.clear()
+
+        assert response.status_code == 400
+        assert response.json()["detail"] == "仅支持 type=proxy，institution/personal 暂未实现"
+
+    def test_netflow_ranking_accepts_auth_header(self, client):
+        mock_collector = MagicMock()
+        mock_collector.get_netflow_ranking = AsyncMock(return_value=[])
+        app.dependency_overrides[get_collector] = lambda: mock_collector
+
+        try:
+            response = client.get(
+                "/api/netflow/top-ranking",
+                headers={"X-API-Key": settings.auth_key},
+            )
+        finally:
+            app.dependency_overrides.clear()
+
+        assert response.status_code == 200
 
 
 class TestResponseModels:

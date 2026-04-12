@@ -79,6 +79,7 @@ class ValueScanCollector:
             PROVIDER_NAME,
             minute_limit=self.minute_point_limit,
             monthly_soft_limit=self.monthly_point_limit,
+            count=points,
         )
         return gate["allowed"]
 
@@ -124,11 +125,13 @@ class ValueScanCollector:
             PROVIDER_NAME,
             minute_limit=self.minute_point_limit,
             monthly_soft_limit=self.monthly_point_limit,
+            count=points_cost,
         )
         if not gate["allowed"]:
             logger.warning(
                 f"ValueScan 预算受限: minute={gate['minute_used']}/{gate['minute_limit']}, "
-                f"monthly={gate['monthly_used']}/{gate['monthly_soft_limit']}"
+                f"monthly={gate['monthly_used']}/{gate['monthly_soft_limit']}, "
+                f"requested={gate['requested']}"
             )
             return None
 

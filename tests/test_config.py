@@ -1,7 +1,9 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 
-from core.config import load_settings
+import pytest
+
+from core.config import DEFAULT_AUTH_KEY, load_settings, validate_runtime_settings
 
 
 def test_auth_key_prefers_nofxos_api_key(monkeypatch):
@@ -50,3 +52,20 @@ def test_okx_credentials_fall_back_to_legacy_env_keys(monkeypatch):
     assert settings.okx_api_key == "okx-old-key"
     assert settings.okx_api_secret == "okx-old-secret"
     assert settings.okx_api_passphrase == "okx-old-passphrase"
+
+
+def test_validate_runtime_settings_rejects_default_auth_key_on_non_loopback_host():
+    settings = load_settings()
+    settings.host = "0.0.0.0"
+    settings.auth_key = DEFAULT_AUTH_KEY
+
+    with pytest.raises(ValueError, match="默认认证密钥"):
+        validate_runtime_settings(settings)
+
+
+def test_validate_runtime_settings_allows_default_auth_key_on_loopback_host():
+    settings = load_settings()
+    settings.host = "127.0.0.1"
+    settings.auth_key = DEFAULT_AUTH_KEY
+
+    validate_runtime_settings(settings)

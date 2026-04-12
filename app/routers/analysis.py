@@ -129,7 +129,7 @@ async def get_high_volatility_coins(
     - 趋势跟踪
     """
     try:
-        coins = await analyzer.get_high_volatility_coins(limit)
+        coins = await analyzer.get_high_volatility_coins(min_volatility=min_volatility, limit=limit)
         return {
             "success": True,
             "data": {

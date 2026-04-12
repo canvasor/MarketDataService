@@ -12,6 +12,8 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 AUTH_ENV_KEYS = ("NOFXOS_API_KEY", "NOFX_LOCAL_AUTH_KEY")
+DEFAULT_AUTH_KEY = "cm_568c67eae410d912c54c"
+LOOPBACK_HOSTS = {"127.0.0.1", "localhost", "::1"}
 
 
 class Settings(BaseSettings):
@@ -33,7 +35,7 @@ class Settings(BaseSettings):
     log_backup_count: int = 5
 
     # 认证配置
-    auth_key: str = "cm_568c67eae410d912c54c"
+    auth_key: str = DEFAULT_AUTH_KEY
     allow_legacy_public_key: bool = True
 
     # Binance 只读配置
@@ -147,6 +149,15 @@ def load_settings() -> Settings:
             break
 
     return settings
+
+
+def is_loopback_host(host: str) -> bool:
+    return (host or "").strip().lower() in LOOPBACK_HOSTS
+
+
+def validate_runtime_settings(settings: Settings) -> None:
+    if settings.auth_key == DEFAULT_AUTH_KEY and not is_loopback_host(settings.host):
+        raise ValueError("默认认证密钥仅允许用于回环地址，请通过环境变量配置自定义认证密钥")
 
 
 settings = load_settings()

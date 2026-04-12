@@ -93,15 +93,51 @@ class ProviderBudgetTracker:
             window.popleft()
         return window
 
+    def _build_usage_snapshot(
+        self,
+        provider: str,
+        minute_limit: int,
+        monthly_soft_limit: int,
+    ) -> Dict[str, Any]:
+        pstate = self._provider_state(provider)
+        minute_window = self._trim_minute_window(provider)
+        monthly_success = int(pstate.get("monthly_success", 0))
+        return {
+            "provider": provider,
+            "month": pstate.get("month"),
+            "monthly_success": monthly_success,
+            "monthly_attempts": int(pstate.get("monthly_attempts", 0)),
+            "monthly_soft_limit": monthly_soft_limit,
+            "monthly_remaining_estimate": max(0, monthly_soft_limit - monthly_success),
+            "minute_used": len(minute_window),
+            "minute_limit": minute_limit,
+            "last_request_at": int(pstate.get("last_request_at", 0)),
+            "last_success_at": int(pstate.get("last_success_at", 0)),
+            "last_error_at": int(pstate.get("last_error_at", 0)),
+            "last_error": pstate.get("last_error"),
+            "soft_blocked": bool(pstate.get("soft_blocked", False)),
+        }
+
     # ---------- public api ----------
-    def can_attempt(self, provider: str, minute_limit: int, monthly_soft_limit: int) -> Dict[str, Any]:
+    def can_attempt(
+        self,
+        provider: str,
+        minute_limit: int,
+        monthly_soft_limit: int,
+        count: int = 1,
+    ) -> Dict[str, Any]:
         with self._lock:
             pstate = self._provider_state(provider)
             now = time.time()
             minute_window = self._trim_minute_window(provider, now)
             minute_used = len(minute_window)
             monthly_used = int(pstate.get("monthly_success", 0))
-            allowed = minute_used < minute_limit and monthly_used < monthly_soft_limit and not pstate.get("soft_blocked", False)
+            requested = max(1, int(count))
+            allowed = (
+                minute_used + requested <= minute_limit
+                and monthly_used + requested <= monthly_soft_limit
+                and not pstate.get("soft_blocked", False)
+            )
             return {
                 "allowed": allowed,
                 "provider": provider,
@@ -109,6 +145,7 @@ class ProviderBudgetTracker:
                 "minute_limit": minute_limit,
                 "monthly_used": monthly_used,
                 "monthly_soft_limit": monthly_soft_limit,
+                "requested": requested,
                 "soft_blocked": bool(pstate.get("soft_blocked", False)),
             }
 
@@ -116,8 +153,10 @@ class ProviderBudgetTracker:
         with self._lock:
             pstate = self._provider_state(provider)
             now = time.time()
-            self._trim_minute_window(provider, now).append(now)
-            pstate["monthly_attempts"] = int(pstate.get("monthly_attempts", 0)) + count
+            window = self._trim_minute_window(provider, now)
+            for _ in range(max(1, int(count))):
+                window.append(now)
+            pstate["monthly_attempts"] = int(pstate.get("monthly_attempts", 0)) + max(1, int(count))
             pstate["last_request_at"] = int(now)
             self._save()
 
@@ -146,29 +185,13 @@ class ProviderBudgetTracker:
 
     def get_provider_usage(self, provider: str, minute_limit: int, monthly_soft_limit: int) -> Dict[str, Any]:
         with self._lock:
-            pstate = self._provider_state(provider)
-            minute_window = self._trim_minute_window(provider)
-            return {
-                "provider": provider,
-                "month": pstate.get("month"),
-                "monthly_success": int(pstate.get("monthly_success", 0)),
-                "monthly_attempts": int(pstate.get("monthly_attempts", 0)),
-                "monthly_soft_limit": monthly_soft_limit,
-                "monthly_remaining_estimate": max(0, monthly_soft_limit - int(pstate.get("monthly_success", 0))),
-                "minute_used": len(minute_window),
-                "minute_limit": minute_limit,
-                "last_request_at": int(pstate.get("last_request_at", 0)),
-                "last_success_at": int(pstate.get("last_success_at", 0)),
-                "last_error_at": int(pstate.get("last_error_at", 0)),
-                "last_error": pstate.get("last_error"),
-                "soft_blocked": bool(pstate.get("soft_blocked", False)),
-            }
+            return self._build_usage_snapshot(provider, minute_limit, monthly_soft_limit)
 
     def get_all_usage(self, provider_limits: Dict[str, Dict[str, int]]) -> Dict[str, Any]:
         with self._lock:
             result = {}
             for provider, limits in provider_limits.items():
-                result[provider] = self.get_provider_usage(
+                result[provider] = self._build_usage_snapshot(
                     provider,
                     minute_limit=int(limits.get("minute_limit", 0)),
                     monthly_soft_limit=int(limits.get("monthly_soft_limit", 0)),

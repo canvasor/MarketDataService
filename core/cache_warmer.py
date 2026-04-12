@@ -93,6 +93,7 @@ class CacheWarmer:
 
         self._running = False
         self._task: Optional[asyncio.Task] = None
+        self._initial_warmup_task: Optional[asyncio.Task] = None
         self._last_warmup_time: float = 0
         self._last_vs_warmup_time: float = 0
 
@@ -106,12 +107,20 @@ class CacheWarmer:
         self._task = asyncio.create_task(self._scheduler_loop())
         logger.info("缓存预热器已启动")
 
-        # 立即执行一次预热
-        await self.warmup()
+        # 立即触发一次后台预热，但不阻塞服务启动
+        self._initial_warmup_task = asyncio.create_task(self.warmup())
 
     async def stop(self) -> None:
         """停止预热调度"""
         self._running = False
+        if self._initial_warmup_task:
+            if not self._initial_warmup_task.done():
+                self._initial_warmup_task.cancel()
+                try:
+                    await self._initial_warmup_task
+                except asyncio.CancelledError:
+                    pass
+            self._initial_warmup_task = None
         if self._task:
             self._task.cancel()
             try:

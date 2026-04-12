@@ -960,14 +960,14 @@ class CoinAnalyzer:
 
         return flash_crash_coins[:limit]
 
-    async def get_high_volatility_coins(self, limit: int = 20) -> List[CoinAnalysis]:
+    async def get_high_volatility_coins(self, min_volatility: float = 5.0, limit: int = 20) -> List[CoinAnalysis]:
         """获取高波动币种"""
         all_analysis = await self.analyze_all()
 
         # 筛选高波动
         high_vol = [
             a for a in all_analysis.values()
-            if a.volatility_24h > 5
+            if a.volatility_24h >= min_volatility
         ]
 
         # 按波动率排序
