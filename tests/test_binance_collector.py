@@ -551,7 +551,7 @@ class TestRateLimitProtection:
 
     @pytest.mark.asyncio
     async def test_get_all_oi_uses_smaller_batches(self, collector, monkeypatch):
-        symbols = [f"S{i}USDT" for i in range(60)]
+        symbols = [f"S{i}USDT" for i in range(120)]
         monkeypatch.setattr(collector, "_refresh_binance_symbols", AsyncMock(return_value=symbols))
         monkeypatch.setattr(collector, "get_all_tickers", AsyncMock(return_value={}))
         monkeypatch.setattr(collector, "_get_symbol_oi", AsyncMock(return_value=OIData(
@@ -563,6 +563,7 @@ class TestRateLimitProtection:
         with patch("collectors.binance_collector.asyncio.sleep", new_callable=AsyncMock) as mock_sleep:
             await collector.get_all_oi()
 
+        # 120 symbols / batch_size 50 = 3 批, 最后一批不 sleep → 2 次 sleep
         assert mock_sleep.await_count == 2
 
 

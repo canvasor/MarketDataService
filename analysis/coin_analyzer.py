@@ -147,6 +147,11 @@ class CoinAnalyzer:
         self._cmc_listings: Dict[str, dict] = {}  # 新增：CMC 市值排名缓存
         self._binance_symbols: Set[str] = set()
 
+        # analyze_all 短期缓存（避免同一预热周期内重复分析）
+        self._analysis_cache: Optional[Dict[str, "CoinAnalysis"]] = None
+        self._analysis_cache_time: float = 0
+        self._analysis_cache_ttl: float = 30  # 30 秒内复用
+
         # 阈值配置 - 降低阈值，让更多币种被分类
         self.config = {
             # 做空信号阈值（降低）
@@ -289,6 +294,12 @@ class CoinAnalyzer:
             include_neutral: 是否包含中性币种
             filter_low_oi: 是否过滤低 OI 流动性币种（与 nofx 后端同步，阈值 15M USD）
         """
+        # 短期缓存：30 秒内复用上次分析结果，避免同一预热周期内重复计算
+        now = time.time()
+        if self._analysis_cache and (now - self._analysis_cache_time < self._analysis_cache_ttl):
+            logger.debug("analyze_all 命中短期缓存，跳过重复分析")
+            return self._analysis_cache
+
         logger.info("开始分析所有币种...")
 
         # 获取数据
@@ -352,6 +363,11 @@ class CoinAnalyzer:
         if filtered_count > 0:
             logger.info(f"OI 流动性过滤: {filtered_count} 个币种被排除（阈值 {min_oi_value_usd/1_000_000:.0f}M USD）")
         logger.info(f"分析完成，共 {len(results)} 个币种")
+
+        # 缓存分析结果
+        self._analysis_cache = results
+        self._analysis_cache_time = time.time()
+
         return results
 
     def is_binance_symbol(self, symbol: str) -> bool:

@@ -79,7 +79,7 @@ class BinanceCollector:
     RATE_LIMIT_RETRY_LIMIT = 2
     RATE_LIMIT_COOLDOWN_SECONDS = 900.0
     RATE_LIMIT_RETRY_SECONDS = 2.0
-    OI_BATCH_SIZE = 25
+    OI_BATCH_SIZE = 50
     OI_HISTORY_BATCH_SIZE = 5
 
     def __init__(self, api_key: Optional[str] = None, api_secret: Optional[str] = None):
@@ -89,7 +89,7 @@ class BinanceCollector:
 
         # 缓存
         self._ticker_cache: TTLCache = TTLCache(maxsize=500, ttl=5)
-        self._oi_cache: TTLCache = TTLCache(maxsize=500, ttl=30)
+        self._oi_cache: TTLCache = TTLCache(maxsize=500, ttl=300)
         self._funding_cache: TTLCache = TTLCache(maxsize=500, ttl=300)
         self._kline_cache: TTLCache = TTLCache(maxsize=1000, ttl=60)
 

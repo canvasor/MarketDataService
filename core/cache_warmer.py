@@ -416,13 +416,17 @@ class CacheWarmer:
         """预热币种数据"""
         warmed = []
 
+        # 一次性获取共享数据，避免每个币种重复请求
+        tickers = await self.collector.get_all_tickers()
+        funding_data = await self.collector.get_all_funding_rates()
+
         # 并发预热，分批处理避免限流
         batch_size = 5
         symbol_list = list(symbols)
 
         for i in range(0, len(symbol_list), batch_size):
             batch = symbol_list[i:i + batch_size]
-            tasks = [self._warmup_single_coin(s) for s in batch]
+            tasks = [self._warmup_single_coin(s, tickers, funding_data) for s in batch]
             results = await asyncio.gather(*tasks, return_exceptions=True)
 
             for symbol, result in zip(batch, results):
@@ -435,10 +439,11 @@ class CacheWarmer:
 
         return warmed
 
-    async def _warmup_single_coin(self, symbol: str) -> bool:
+    async def _warmup_single_coin(self, symbol: str, tickers: dict = None, funding_data: dict = None) -> bool:
         """预热单个币种数据"""
         try:
-            tickers = await self.collector.get_all_tickers()
+            if tickers is None:
+                tickers = await self.collector.get_all_tickers()
             ticker = tickers.get(symbol)
 
             if not ticker:
@@ -448,7 +453,8 @@ class CacheWarmer:
             oi_data = await self.collector.get_oi_with_history(symbol)
 
             # 获取资金费率
-            funding_data = await self.collector.get_all_funding_rates()
+            if funding_data is None:
+                funding_data = await self.collector.get_all_funding_rates()
             funding = funding_data.get(symbol)
 
             # 获取所有时间周期价格变化
