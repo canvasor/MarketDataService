@@ -26,7 +26,7 @@ class CacheEntry:
     """缓存条目"""
     data: Any
     created_at: float = field(default_factory=time.time)
-    ttl: float = 1800  # 默认 30 分钟
+    ttl: float = 600  # 默认 10 分钟
 
     def is_expired(self) -> bool:
         """检查是否过期"""
@@ -57,7 +57,7 @@ class APICache:
     KEY_SYSTEM_STATUS = "system_status"
     KEY_COIN_PREFIX = "coin_"
 
-    def __init__(self, default_ttl: float = 1800):
+    def __init__(self, default_ttl: float = 600):
         """
         初始化缓存管理器
 
@@ -193,7 +193,7 @@ def get_cache() -> APICache:
     return _cache_instance
 
 
-def init_cache(default_ttl: float = 1800) -> APICache:
+def init_cache(default_ttl: float = 600) -> APICache:
     """初始化全局缓存实例"""
     global _cache_instance
     _cache_instance = APICache(default_ttl=default_ttl)

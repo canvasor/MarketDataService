@@ -65,7 +65,7 @@ class CacheWarmer:
         cmc_collector: Optional["CMCCollector"] = None,
         vs_collector=None,
         cache: Optional[APICache] = None,
-        cache_ttl: float = 1800,  # 30 分钟
+        cache_ttl: float = 600,  # 10 分钟
         ai500_limit: int = 20,
         vs_warmup_interval_minutes: int = 10,
     ):

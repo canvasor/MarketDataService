@@ -90,7 +90,7 @@ class Settings(BaseSettings):
 
     # 缓存预热配置
     cache_warmup_enabled: bool = True
-    cache_warmup_ttl: int = 1800
+    cache_warmup_ttl: int = 600
 
     # 选币阈值
     max_coins: int = 20
