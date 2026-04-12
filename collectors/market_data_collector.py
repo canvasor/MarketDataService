@@ -280,15 +280,6 @@ class UnifiedMarketCollector(BinanceCollector):
                 return data
         return (await self.get_all_oi()).get(symbol)
 
-    async def get_oi_ranking_with_history(self, rank_type: str = "top", limit: int = 20) -> List[OIData]:
-        all_oi = list((await self.get_all_oi()).values())
-        liquid = [x for x in all_oi if x.oi_value > 1_000_000]
-        if rank_type == "top":
-            liquid.sort(key=lambda x: x.oi_delta_value_1h, reverse=True)
-        else:
-            liquid.sort(key=lambda x: x.oi_delta_value_1h)
-        return liquid[:limit]
-
     async def get_all_funding_rates(self) -> Dict[str, FundingData]:
         rates = await super().get_all_funding_rates()
         if rates:
