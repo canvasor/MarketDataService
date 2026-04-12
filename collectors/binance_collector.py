@@ -465,7 +465,15 @@ class BinanceCollector:
             # OI 减少值最大（负值最小）
             oi_with_history.sort(key=lambda x: x.oi_delta_value_1h)
 
-        result = oi_with_history[:limit]
+        # 按 symbol 去重，保留排位靠前的
+        seen = set()
+        deduplicated = []
+        for item in oi_with_history:
+            if item.symbol not in seen:
+                seen.add(item.symbol)
+                deduplicated.append(item)
+
+        result = deduplicated[:limit]
         self._oi_cache[cache_key] = result
         return result
 
@@ -506,12 +514,21 @@ class BinanceCollector:
             if i + batch_size < len(symbols_to_fetch):
                 await asyncio.sleep(0.1)
 
-        # 分别排序并缓存
+        # 按 symbol 去重，分别排序并缓存
+        def _dedup(items: list) -> list:
+            seen = set()
+            result = []
+            for item in items:
+                if item.symbol not in seen:
+                    seen.add(item.symbol)
+                    result.append(item)
+            return result
+
         top_sorted = sorted(oi_with_history, key=lambda x: x.oi_delta_value_1h, reverse=True)
         low_sorted = sorted(oi_with_history, key=lambda x: x.oi_delta_value_1h)
 
-        top_result = top_sorted[:limit]
-        low_result = low_sorted[:limit]
+        top_result = _dedup(top_sorted)[:limit]
+        low_result = _dedup(low_sorted)[:limit]
 
         self._oi_cache[cache_key_top] = top_result
         self._oi_cache[cache_key_low] = low_result
