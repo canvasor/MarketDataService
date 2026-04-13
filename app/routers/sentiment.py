@@ -9,6 +9,8 @@ from fastapi import APIRouter, Depends, Query
 from app.auth import require_auth
 from app.dependencies import get_cmc_collector
 from collectors.cmc_collector import CMCCollector
+from core.cache import APICache, get_cache
+from core.config import settings
 
 logger = logging.getLogger(__name__)
 
@@ -36,6 +38,11 @@ async def get_fear_greed(
     - 76-100: Extreme Greed（极度贪婪）- 可能是卖出信号
     """
     try:
+        cache = get_cache()
+        cache_key = f"{APICache.KEY_SENTIMENT_FG_PREFIX}{history}"
+        cached = cache.get(cache_key)
+        if cached:
+            return cached
         result = {
             "success": True,
             "data": {
@@ -61,6 +68,7 @@ async def get_fear_greed(
             history_data = await cmc_collector.get_fear_greed_history(history)
             result["data"]["history"] = history_data
 
+        cache.set(cache_key, result, ttl=settings.cache_ttl_macro)
         return result
 
     except Exception as e:
@@ -94,11 +102,17 @@ async def get_market_sentiment(
     - 山寨季指数
     """
     try:
+        cache = get_cache()
+        cached = cache.get(APICache.KEY_SENTIMENT_MARKET)
+        if cached:
+            return cached
         sentiment = await cmc_collector.safe_get_market_sentiment()
-        return {
+        result = {
             "success": True,
             "data": sentiment,
         }
+        cache.set(APICache.KEY_SENTIMENT_MARKET, result, ttl=settings.cache_ttl_macro)
+        return result
     except Exception as e:
         logger.error(f"获取市场情绪失败: {e}")
         return {

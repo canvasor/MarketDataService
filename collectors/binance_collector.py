@@ -183,6 +183,8 @@ class BinanceCollector:
                         # -4108: Symbol is on delivering/settling/closed - 预期行为，降级为 debug
                         if "-4108" in text:
                             logger.debug(f"Binance API: symbol not available (settling/delivering): {params}")
+                        elif "-1121" in text:
+                            logger.debug(f"Binance API: invalid symbol: {params}")
                         else:
                             logger.error(f"Binance API error {resp.status}: {text} (endpoint={endpoint}, params={params})")
                         return {}
@@ -543,6 +545,9 @@ class BinanceCollector:
             ticker: ticker 数据（可选，用于获取价格）
             with_history: 是否获取历史变化数据
         """
+        # 校验 symbol 是否为 Binance 合约有效币种，避免对 OKX 独有 symbol 发起无效请求
+        if self._usdt_symbols and symbol not in self._usdt_symbols:
+            return None
         try:
             data = await self._request("/fapi/v1/openInterest", {"symbol": symbol})
             if not data:

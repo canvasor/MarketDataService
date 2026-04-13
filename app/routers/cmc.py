@@ -9,6 +9,8 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from app.auth import require_auth
 from app.dependencies import get_cmc_collector
 from collectors.cmc_collector import CMCCollector
+from core.cache import APICache, get_cache
+from core.config import settings
 
 logger = logging.getLogger(__name__)
 
@@ -30,6 +32,10 @@ async def get_cmc_listings(
         raise HTTPException(status_code=503, detail="CoinGecko / CMC 宏观数据源未配置")
 
     try:
+        cache = get_cache()
+        cached = cache.get(APICache.KEY_CMC_LISTINGS)
+        if cached:
+            return cached
         coins = await cmc_collector.get_latest_listings(limit)
 
         coin_list = []
@@ -51,7 +57,7 @@ async def get_cmc_listings(
         # 按市值排序
         coin_list.sort(key=lambda x: x["rank"])
 
-        return {
+        result = {
             "success": True,
             "data": {
                 "coins": coin_list,
@@ -60,6 +66,8 @@ async def get_cmc_listings(
                 "timestamp": int(time.time()),
             },
         }
+        cache.set(APICache.KEY_CMC_LISTINGS, result, ttl=settings.cache_ttl_macro)
+        return result
     except Exception as e:
         logger.error(f"获取 CMC 列表失败: {e}")
         raise HTTPException(status_code=500, detail=str(e))
@@ -80,6 +88,10 @@ async def get_cmc_trending(
         raise HTTPException(status_code=503, detail="CoinGecko / CMC 宏观数据源未配置")
 
     try:
+        cache = get_cache()
+        cached = cache.get(APICache.KEY_CMC_TRENDING)
+        if cached:
+            return cached
         trending = await cmc_collector.get_trending(limit)
 
         coin_list = []
@@ -93,7 +105,7 @@ async def get_cmc_trending(
                 "trending_score": coin.trending_score,
             })
 
-        return {
+        result = {
             "success": True,
             "data": {
                 "coins": coin_list,
@@ -103,6 +115,8 @@ async def get_cmc_trending(
                 "timestamp": int(time.time()),
             },
         }
+        cache.set(APICache.KEY_CMC_TRENDING, result, ttl=settings.cache_ttl_macro)
+        return result
     except Exception as e:
         logger.error(f"获取 CMC 热门币种失败: {e}")
         raise HTTPException(status_code=500, detail=str(e))
@@ -124,9 +138,14 @@ async def get_cmc_gainers_losers(
         raise HTTPException(status_code=503, detail="CoinGecko / CMC 宏观数据源未配置")
 
     try:
+        cache = get_cache()
+        cache_key = f"{APICache.KEY_CMC_GAINERS_LOSERS_PREFIX}{time_period}"
+        cached = cache.get(cache_key)
+        if cached:
+            return cached
         gainers, losers = await cmc_collector.get_gainers_losers(limit, time_period)
 
-        return {
+        result = {
             "success": True,
             "data": {
                 "gainers": [
@@ -154,6 +173,8 @@ async def get_cmc_gainers_losers(
                 "timestamp": int(time.time()),
             },
         }
+        cache.set(cache_key, result, ttl=settings.cache_ttl_macro)
+        return result
     except Exception as e:
         logger.error(f"获取 CMC 涨跌幅排行失败: {e}")
         raise HTTPException(status_code=500, detail=str(e))
@@ -173,12 +194,16 @@ async def get_cmc_market_overview(
         raise HTTPException(status_code=503, detail="CoinGecko / CMC 宏观数据源未配置")
 
     try:
+        cache = get_cache()
+        cached = cache.get(APICache.KEY_CMC_OVERVIEW)
+        if cached:
+            return cached
         overview = await cmc_collector.get_market_overview()
 
         if not overview:
             raise HTTPException(status_code=503, detail="无法获取市场数据")
 
-        return {
+        result = {
             "success": True,
             "data": {
                 "total_market_cap": overview.get("total_market_cap", 0),
@@ -192,6 +217,8 @@ async def get_cmc_market_overview(
                 "timestamp": int(time.time()),
             },
         }
+        cache.set(APICache.KEY_CMC_OVERVIEW, result, ttl=settings.cache_ttl_macro)
+        return result
     except HTTPException:
         raise
     except Exception as e:

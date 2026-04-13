@@ -12,6 +12,7 @@ from app.schemas import OIRankingResponse
 from collectors.cmc_collector import CMCCollector
 from collectors.market_data_collector import UnifiedMarketCollector
 from core.cache import APICache, get_cache
+from core.config import settings
 
 logger = logging.getLogger(__name__)
 
@@ -178,10 +179,14 @@ async def get_oi_cap_ranking(
     collector: UnifiedMarketCollector = Depends(get_collector),
     cmc_collector: CMCCollector = Depends(get_cmc_collector),
 ):
+    cache = get_cache()
+    cached = cache.get(APICache.KEY_OI_CAP)
+    if cached:
+        return cached
     listings = await cmc_collector.get_latest_listings(300)
     lookup = {k: {"market_cap": v.market_cap, "cmc_rank": v.cmc_rank} for k, v in listings.items()}
     rows = await collector.get_oi_cap_ranking(market_cap_lookup=lookup, limit=limit)
-    return {
+    result = {
         "success": True,
         "data": {
             "rows": rows,
@@ -190,3 +195,5 @@ async def get_oi_cap_ranking(
             "market_cap_provider": cmc_collector.active_provider,
         },
     }
+    cache.set(APICache.KEY_OI_CAP, result, ttl=settings.cache_ttl_ranking)
+    return result

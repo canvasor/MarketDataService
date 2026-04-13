@@ -9,6 +9,8 @@ from fastapi import APIRouter, Depends, Query
 from app.auth import require_auth
 from app.dependencies import get_collector
 from collectors.market_data_collector import UnifiedMarketCollector
+from core.cache import APICache, get_cache
+from core.config import settings
 from tools.strategy_tools import (
     BACKTEST_FIELDS,
     PAIR_TEMPLATE,
@@ -43,7 +45,15 @@ async def get_pair_neutral_context(
     interval: str = Query("15m"),
     collector: UnifiedMarketCollector = Depends(get_collector),
 ):
+    cache = get_cache()
+    cache_key = f"{APICache.KEY_STRATEGY_CONTEXT_PREFIX}{symbol_a}_{symbol_b}_{interval}_{lookback_bars}"
+    cached = cache.get(cache_key)
+    if cached:
+        return cached
+
     data = await build_pair_neutral_context(
         collector, symbol_a, symbol_b, lookback_bars=lookback_bars, interval=interval,
     )
-    return {"success": True, "data": data}
+    result = {"success": True, "data": data}
+    cache.set(cache_key, result, ttl=settings.cache_ttl_ranking)
+    return result

@@ -11,6 +11,8 @@ from app.auth import require_auth
 from app.converters import analysis_to_coin_info, load_cmc_data_for_analyzer
 from app.dependencies import get_analyzer, get_cmc_collector
 from collectors.cmc_collector import CMCCollector
+from core.cache import APICache, get_cache
+from core.config import settings
 
 logger = logging.getLogger(__name__)
 
@@ -33,8 +35,12 @@ async def get_short_candidates(
     3. 高波动下跌趋势
     """
     try:
+        cache = get_cache()
+        cached = cache.get(APICache.KEY_ANALYSIS_SHORT)
+        if cached:
+            return cached
         coins = await analyzer.get_short_candidates(limit)
-        return {
+        result = {
             "success": True,
             "data": {
                 "coins": [analysis_to_coin_info(c).model_dump() for c in coins],
@@ -44,6 +50,8 @@ async def get_short_candidates(
                 "timestamp": int(time.time()),
             },
         }
+        cache.set(APICache.KEY_ANALYSIS_SHORT, result, ttl=settings.cache_ttl_analysis)
+        return result
     except Exception as e:
         logger.error(f"获取做空候选失败: {e}")
         raise HTTPException(status_code=500, detail=str(e))
@@ -65,8 +73,12 @@ async def get_long_candidates(
     3. 回调后企稳反弹
     """
     try:
+        cache = get_cache()
+        cached = cache.get(APICache.KEY_ANALYSIS_LONG)
+        if cached:
+            return cached
         coins = await analyzer.get_long_candidates(limit)
-        return {
+        result = {
             "success": True,
             "data": {
                 "coins": [analysis_to_coin_info(c).model_dump() for c in coins],
@@ -76,6 +88,8 @@ async def get_long_candidates(
                 "timestamp": int(time.time()),
             },
         }
+        cache.set(APICache.KEY_ANALYSIS_LONG, result, ttl=settings.cache_ttl_analysis)
+        return result
     except Exception as e:
         logger.error(f"获取做多候选失败: {e}")
         raise HTTPException(status_code=500, detail=str(e))
@@ -96,8 +110,12 @@ async def get_flash_crash_candidates(
     3. 极端资金费率
     """
     try:
+        cache = get_cache()
+        cached = cache.get(APICache.KEY_ANALYSIS_FLASH_CRASH)
+        if cached:
+            return cached
         coins = await analyzer.get_flash_crash_candidates(limit)
-        return {
+        result = {
             "success": True,
             "data": {
                 "coins": [analysis_to_coin_info(c).model_dump() for c in coins],
@@ -107,6 +125,8 @@ async def get_flash_crash_candidates(
                 "description": "这些币种有闪崩风险，适合在反弹时做空埋伏",
             },
         }
+        cache.set(APICache.KEY_ANALYSIS_FLASH_CRASH, result, ttl=settings.cache_ttl_analysis)
+        return result
     except Exception as e:
         logger.error(f"获取闪崩风险币种失败: {e}")
         raise HTTPException(status_code=500, detail=str(e))
@@ -129,8 +149,12 @@ async def get_high_volatility_coins(
     - 趋势跟踪
     """
     try:
+        cache = get_cache()
+        cached = cache.get(APICache.KEY_ANALYSIS_HIGH_VOL)
+        if cached:
+            return cached
         coins = await analyzer.get_high_volatility_coins(min_volatility=min_volatility, limit=limit)
-        return {
+        result = {
             "success": True,
             "data": {
                 "coins": [analysis_to_coin_info(c).model_dump() for c in coins],
@@ -141,6 +165,8 @@ async def get_high_volatility_coins(
                 "timestamp": int(time.time()),
             },
         }
+        cache.set(APICache.KEY_ANALYSIS_HIGH_VOL, result, ttl=settings.cache_ttl_analysis)
+        return result
     except Exception as e:
         logger.error(f"获取高波动币种失败: {e}")
         raise HTTPException(status_code=500, detail=str(e))
@@ -169,6 +195,10 @@ async def get_early_signal_candidates(
     - 获得更好的入场价格
     """
     try:
+        cache = get_cache()
+        cached = cache.get(APICache.KEY_ANALYSIS_EARLY_SIGNALS)
+        if cached:
+            return cached
         coins = await analyzer.get_early_signal_candidates(limit)
 
         # 按信号类型分组统计
@@ -177,7 +207,7 @@ async def get_early_signal_candidates(
             signal = c.vwap_signal or "unknown"
             signal_counts[signal] = signal_counts.get(signal, 0) + 1
 
-        return {
+        result = {
             "success": True,
             "data": {
                 "coins": [analysis_to_coin_info(c).model_dump() for c in coins],
@@ -188,6 +218,8 @@ async def get_early_signal_candidates(
                 "description": "基于 VWAP 的早期信号，用于提前布局避免追高",
             },
         }
+        cache.set(APICache.KEY_ANALYSIS_EARLY_SIGNALS, result, ttl=settings.cache_ttl_analysis)
+        return result
     except Exception as e:
         logger.error(f"获取早期信号候选失败: {e}")
         raise HTTPException(status_code=500, detail=str(e))
@@ -208,6 +240,10 @@ async def get_market_overview(
     - CMC 全市场数据（需要 CMC key，可选）
     """
     try:
+        cache = get_cache()
+        cached = cache.get(APICache.KEY_ANALYSIS_OVERVIEW)
+        if cached:
+            return cached
         # 1. Binance 合约市场分析
         all_analysis = await analyzer.analyze_all()
 
@@ -233,7 +269,7 @@ async def get_market_overview(
         # 2. 全网市场情绪（CMC + 恐惧贪婪指数）
         global_sentiment = await cmc_collector.safe_get_market_sentiment()
 
-        return {
+        result = {
             "success": True,
             "data": {
                 # Binance 合约市场数据
@@ -253,6 +289,8 @@ async def get_market_overview(
                 "timestamp": int(time.time()),
             },
         }
+        cache.set(APICache.KEY_ANALYSIS_OVERVIEW, result, ttl=settings.cache_ttl_analysis)
+        return result
     except Exception as e:
         logger.error(f"获取市场概览失败: {e}")
         raise HTTPException(status_code=500, detail=str(e))

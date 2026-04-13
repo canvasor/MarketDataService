@@ -52,10 +52,35 @@ class APICache:
     KEY_AI500_LIST = "ai500_list"
     KEY_AI500_SHORT = "ai500_short"
     KEY_AI500_LONG = "ai500_long"
+    KEY_AI500_STATS = "ai500_stats"
     KEY_OI_TOP = "oi_top"
     KEY_OI_LOW = "oi_low"
+    KEY_OI_CAP = "oi_cap"
     KEY_SYSTEM_STATUS = "system_status"
     KEY_COIN_PREFIX = "coin_"
+    # 行情排行
+    KEY_NETFLOW_PREFIX = "netflow_"
+    KEY_PRICE_RANKING_PREFIX = "price_"
+    KEY_FUNDING_TOP = "funding_top"
+    KEY_FUNDING_LOW = "funding_low"
+    KEY_HEATMAP_PREFIX = "heatmap_"
+    # 分析
+    KEY_ANALYSIS_SHORT = "analysis_short"
+    KEY_ANALYSIS_LONG = "analysis_long"
+    KEY_ANALYSIS_FLASH_CRASH = "analysis_flash_crash"
+    KEY_ANALYSIS_HIGH_VOL = "analysis_high_vol"
+    KEY_ANALYSIS_EARLY_SIGNALS = "analysis_early_signals"
+    KEY_ANALYSIS_OVERVIEW = "analysis_overview"
+    # CMC / 宏观
+    KEY_CMC_LISTINGS = "cmc_listings"
+    KEY_CMC_TRENDING = "cmc_trending"
+    KEY_CMC_GAINERS_LOSERS_PREFIX = "cmc_gl_"
+    KEY_CMC_OVERVIEW = "cmc_overview"
+    # 情绪
+    KEY_SENTIMENT_FG_PREFIX = "sentiment_fg_"
+    KEY_SENTIMENT_MARKET = "sentiment_market"
+    # 策略
+    KEY_STRATEGY_CONTEXT_PREFIX = "strategy_ctx_"
 
     def __init__(self, default_ttl: float = 600):
         """

@@ -16,6 +16,8 @@ from app.utils import normalize_symbol
 from collectors.cmc_collector import CMCCollector
 from collectors.market_data_collector import UnifiedMarketCollector
 from collectors.valuescan_collector import ValueScanCollector
+from core.cache import APICache, get_cache
+from core.config import settings
 
 logger = logging.getLogger(__name__)
 
@@ -68,8 +70,13 @@ async def get_netflow_top_ranking(
     collector: UnifiedMarketCollector = Depends(get_collector),
 ):
     _ensure_supported_netflow_type(type)
+    cache = get_cache()
+    cache_key = f"{APICache.KEY_NETFLOW_PREFIX}top_{duration}_{trade}"
+    cached = cache.get(cache_key)
+    if cached:
+        return cached
     rows = await collector.get_netflow_ranking(rank_type="top", duration=duration, limit=limit, trade=trade)
-    return {
+    result = {
         "success": True,
         "data": {
             "rows": rows,
@@ -81,6 +88,8 @@ async def get_netflow_top_ranking(
             "timestamp": int(time.time()),
         },
     }
+    cache.set(cache_key, result, ttl=settings.cache_ttl_ranking)
+    return result
 
 
 @router.get("/api/netflow/low-ranking")
@@ -93,8 +102,13 @@ async def get_netflow_low_ranking(
     collector: UnifiedMarketCollector = Depends(get_collector),
 ):
     _ensure_supported_netflow_type(type)
+    cache = get_cache()
+    cache_key = f"{APICache.KEY_NETFLOW_PREFIX}low_{duration}_{trade}"
+    cached = cache.get(cache_key)
+    if cached:
+        return cached
     rows = await collector.get_netflow_ranking(rank_type="low", duration=duration, limit=limit, trade=trade)
-    return {
+    result = {
         "success": True,
         "data": {
             "rows": rows,
@@ -106,6 +120,8 @@ async def get_netflow_low_ranking(
             "timestamp": int(time.time()),
         },
     }
+    cache.set(cache_key, result, ttl=settings.cache_ttl_ranking)
+    return result
 
 
 @router.get("/api/price/ranking")
@@ -115,8 +131,13 @@ async def get_price_ranking(
     limit: int = Query(20, ge=1, le=100),
     collector: UnifiedMarketCollector = Depends(get_collector),
 ):
+    cache = get_cache()
+    cache_key = f"{APICache.KEY_PRICE_RANKING_PREFIX}{duration}"
+    cached = cache.get(cache_key)
+    if cached:
+        return cached
     rows = await collector.get_price_ranking(duration=duration, limit=limit)
-    return {
+    result = {
         "success": True,
         "data": {
             "rows": rows,
@@ -125,6 +146,8 @@ async def get_price_ranking(
             "timestamp": int(time.time()),
         },
     }
+    cache.set(cache_key, result, ttl=settings.cache_ttl_ranking)
+    return result
 
 
 @router.get("/api/funding-rate/top")
@@ -133,8 +156,12 @@ async def get_top_funding_rates(
     limit: int = Query(20, ge=1, le=100),
     collector: UnifiedMarketCollector = Depends(get_collector),
 ):
+    cache = get_cache()
+    cached = cache.get(APICache.KEY_FUNDING_TOP)
+    if cached:
+        return cached
     rows = await collector.get_funding_rate_ranking(rank_type="top", limit=limit)
-    return {
+    result = {
         "success": True,
         "data": {
             "rows": rows,
@@ -143,6 +170,8 @@ async def get_top_funding_rates(
             "timestamp": int(time.time()),
         },
     }
+    cache.set(APICache.KEY_FUNDING_TOP, result, ttl=settings.cache_ttl_ranking)
+    return result
 
 
 @router.get("/api/funding-rate/low")
@@ -151,8 +180,12 @@ async def get_low_funding_rates(
     limit: int = Query(20, ge=1, le=100),
     collector: UnifiedMarketCollector = Depends(get_collector),
 ):
+    cache = get_cache()
+    cached = cache.get(APICache.KEY_FUNDING_LOW)
+    if cached:
+        return cached
     rows = await collector.get_funding_rate_ranking(rank_type="low", limit=limit)
-    return {
+    result = {
         "success": True,
         "data": {
             "rows": rows,
@@ -161,6 +194,8 @@ async def get_low_funding_rates(
             "timestamp": int(time.time()),
         },
     }
+    cache.set(APICache.KEY_FUNDING_LOW, result, ttl=settings.cache_ttl_ranking)
+    return result
 
 
 @router.get("/api/funding-rate/{symbol}")
@@ -194,10 +229,17 @@ async def get_future_heatmap(
     collector: UnifiedMarketCollector = Depends(get_collector),
 ):
     symbol = normalize_symbol(symbol)
+    cache = get_cache()
+    cache_key = f"{APICache.KEY_HEATMAP_PREFIX}future_{symbol}"
+    cached = cache.get(cache_key)
+    if cached:
+        return cached
     row = await collector.get_heatmap(symbol, trade="future")
     if not row:
         raise HTTPException(status_code=404, detail=f"热力图数据不存在: {symbol}")
-    return {"success": True, "data": row}
+    result = {"success": True, "data": row}
+    cache.set(cache_key, result, ttl=settings.cache_ttl_heatmap)
+    return result
 
 
 @router.get("/api/heatmap/spot/{symbol}")
@@ -207,10 +249,17 @@ async def get_spot_heatmap(
     collector: UnifiedMarketCollector = Depends(get_collector),
 ):
     symbol = normalize_symbol(symbol)
+    cache = get_cache()
+    cache_key = f"{APICache.KEY_HEATMAP_PREFIX}spot_{symbol}"
+    cached = cache.get(cache_key)
+    if cached:
+        return cached
     row = await collector.get_heatmap(symbol, trade="spot")
     if not row:
         raise HTTPException(status_code=404, detail=f"热力图数据不存在: {symbol}")
-    return {"success": True, "data": row}
+    result = {"success": True, "data": row}
+    cache.set(cache_key, result, ttl=settings.cache_ttl_heatmap)
+    return result
 
 
 @router.get("/api/heatmap/list")
@@ -220,8 +269,13 @@ async def get_heatmap_list(
     limit: int = Query(20, ge=1, le=100),
     collector: UnifiedMarketCollector = Depends(get_collector),
 ):
+    cache = get_cache()
+    cache_key = f"{APICache.KEY_HEATMAP_PREFIX}list_{trade}"
+    cached = cache.get(cache_key)
+    if cached:
+        return cached
     rows = await collector.get_heatmap_list(trade=trade, limit=limit)
-    return {
+    result = {
         "success": True,
         "data": {
             "rows": rows,
@@ -230,3 +284,5 @@ async def get_heatmap_list(
             "timestamp": int(time.time()),
         },
     }
+    cache.set(cache_key, result, ttl=settings.cache_ttl_heatmap)
+    return result
