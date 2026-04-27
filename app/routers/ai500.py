@@ -129,6 +129,48 @@ async def get_ai500_list(
         raise HTTPException(status_code=500, detail=str(e))
 
 
+@router.get("/api/ai500/stats")
+async def get_ai500_stats(
+    auth: str = Depends(require_auth),
+    analyzer: CoinAnalyzer = Depends(get_analyzer),
+    cmc_collector: CMCCollector = Depends(get_cmc_collector),
+):
+    """获取本地 AI500 候选池统计。"""
+    await load_cmc_data_for_analyzer(cmc_collector, analyzer)
+    all_analysis = await analyzer.analyze_all(include_neutral=True, filter_low_oi=False)
+    rows = list(all_analysis.values())
+    if not rows:
+        return {"success": True, "data": {"count": 0, "timestamp": int(time.time())}}
+
+    active = [x for x in rows if x.score >= 70 and x.direction != Direction.NEUTRAL]
+    long_count = sum(1 for x in active if x.direction == Direction.LONG)
+    short_count = sum(1 for x in active if x.direction == Direction.SHORT)
+    scores = [x.score for x in rows]
+    active_scores = [x.score for x in active] or [0.0]
+
+    return {
+        "success": True,
+        "data": {
+            "universe_count": len(rows),
+            "active_count": len(active),
+            "active_ratio": len(active) / len(rows) if rows else 0.0,
+            "direction_distribution": {
+                "long": long_count,
+                "short": short_count,
+                "neutral": len(rows) - long_count - short_count,
+            },
+            "score_stats": {
+                "avg": sum(scores) / len(scores),
+                "max": max(scores),
+                "min": min(scores),
+                "active_avg": sum(active_scores) / len(active_scores),
+            },
+            "mode": "local_proxy_ai500",
+            "timestamp": int(time.time()),
+        },
+    }
+
+
 @router.get("/api/ai500/{symbol}")
 async def get_ai500_symbol(
     symbol: str,
@@ -182,44 +224,3 @@ async def get_ai500_symbol(
         },
     }
 
-
-@router.get("/api/ai500/stats")
-async def get_ai500_stats(
-    auth: str = Depends(require_auth),
-    analyzer: CoinAnalyzer = Depends(get_analyzer),
-    cmc_collector: CMCCollector = Depends(get_cmc_collector),
-):
-    """获取本地 AI500 候选池统计。"""
-    await load_cmc_data_for_analyzer(cmc_collector, analyzer)
-    all_analysis = await analyzer.analyze_all(include_neutral=True, filter_low_oi=False)
-    rows = list(all_analysis.values())
-    if not rows:
-        return {"success": True, "data": {"count": 0, "timestamp": int(time.time())}}
-
-    active = [x for x in rows if x.score >= 70 and x.direction != Direction.NEUTRAL]
-    long_count = sum(1 for x in active if x.direction == Direction.LONG)
-    short_count = sum(1 for x in active if x.direction == Direction.SHORT)
-    scores = [x.score for x in rows]
-    active_scores = [x.score for x in active] or [0.0]
-
-    return {
-        "success": True,
-        "data": {
-            "universe_count": len(rows),
-            "active_count": len(active),
-            "active_ratio": len(active) / len(rows) if rows else 0.0,
-            "direction_distribution": {
-                "long": long_count,
-                "short": short_count,
-                "neutral": len(rows) - long_count - short_count,
-            },
-            "score_stats": {
-                "avg": sum(scores) / len(scores),
-                "max": max(scores),
-                "min": min(scores),
-                "active_avg": sum(active_scores) / len(active_scores),
-            },
-            "mode": "local_proxy_ai500",
-            "timestamp": int(time.time()),
-        },
-    }

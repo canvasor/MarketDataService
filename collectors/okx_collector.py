@@ -55,6 +55,11 @@ class OKXOIInfo:
 
 class OKXCollector:
     BASE_URL = "https://www.okx.com"
+    REQUEST_CONCURRENCY = 8
+    REQUEST_TIMEOUT_SECONDS = 15
+    REQUEST_FAILURE_COOLDOWN_SECONDS = 30
+    REQUEST_FAILURE_THRESHOLD = 3
+    BULK_FALLBACK_SYMBOL_LIMIT = 20
 
     INTERVAL_MAP = {
         "1m": "1m",
@@ -89,6 +94,9 @@ class OKXCollector:
         self._oi_cache: TTLCache = TTLCache(maxsize=2000, ttl=60)
         self._kline_cache: TTLCache = TTLCache(maxsize=1000, ttl=30)
         self._book_cache: TTLCache = TTLCache(maxsize=500, ttl=10)
+        self._request_semaphore = asyncio.Semaphore(self.REQUEST_CONCURRENCY)
+        self._cooldown_until = 0.0
+        self._consecutive_failures = 0
 
     async def _get_session(self) -> aiohttp.ClientSession:
         if self.session is None or self.session.closed:
@@ -117,6 +125,10 @@ class OKXCollector:
     async def _request(self, path: str, params: Optional[dict] = None, private: bool = False) -> dict:
         if not self.enabled:
             return {}
+        now = time.monotonic()
+        if self._cooldown_until > now:
+            logger.debug("OKX API cooldown active for %.1fs: %s", self._cooldown_until - now, path)
+            return {}
         session = await self._get_session()
         query = ""
         if params:
@@ -126,20 +138,80 @@ class OKXCollector:
         headers = self._sign_headers("GET", request_path) if private else {}
         url = f"{self.BASE_URL}{request_path}"
         try:
-            async with session.get(url, headers=headers, timeout=15) as resp:
-                if resp.status != 200:
-                    logger.debug("OKX API error %s on %s: %s", resp.status, request_path, await resp.text())
-                    return {}
-                data = await resp.json()
-                if isinstance(data, dict) and data.get("code") in ("0", 0, None):
-                    return data
-                return data if isinstance(data, dict) else {}
+            async with self._request_semaphore:
+                async with session.get(url, headers=headers, timeout=self.REQUEST_TIMEOUT_SECONDS) as resp:
+                    if resp.status != 200:
+                        text = await resp.text()
+                        logger.debug("OKX API error %s on %s: %s", resp.status, request_path, text)
+                        if resp.status == 429:
+                            self._record_request_failure()
+                        return {}
+                    data = await resp.json()
+                    if isinstance(data, dict) and data.get("code") in ("0", 0, None):
+                        self._record_request_success()
+                        return data
+                    if isinstance(data, dict) and str(data.get("code")) == "50011":
+                        logger.warning("OKX API rate limited: %s", request_path)
+                        self._record_request_failure()
+                        return {}
+                    return data if isinstance(data, dict) else {}
         except asyncio.TimeoutError:
+            self._record_request_failure()
             logger.warning("OKX API timeout: %s", request_path)
             return {}
         except Exception as exc:
+            self._record_request_failure()
             logger.warning("OKX API error: %s", exc)
             return {}
+
+    def _record_request_success(self) -> None:
+        self._consecutive_failures = 0
+
+    def _record_request_failure(self) -> None:
+        self._consecutive_failures += 1
+        if self._consecutive_failures >= self.REQUEST_FAILURE_THRESHOLD:
+            self._cooldown_until = time.monotonic() + self.REQUEST_FAILURE_COOLDOWN_SECONDS
+            self._consecutive_failures = 0
+            logger.warning("OKX API cooldown started for %ss", self.REQUEST_FAILURE_COOLDOWN_SECONDS)
+
+    @staticmethod
+    def _symbol_from_inst_id(inst_id: str) -> str:
+        parts = (inst_id or "").upper().split("-")
+        if len(parts) >= 3 and parts[1] == "USDT" and parts[-1] == "SWAP":
+            return f"{parts[0]}USDT"
+        return ""
+
+    @staticmethod
+    def _float_value(value: object) -> float:
+        try:
+            return float(value or 0)
+        except (TypeError, ValueError):
+            return 0.0
+
+    def _parse_open_interest_item(
+        self,
+        item: dict,
+        tickers: Optional[Dict[str, OKXSwapTicker]] = None,
+    ) -> Optional[OKXOIInfo]:
+        inst_id = item.get("instId") or ""
+        symbol = self._symbol_from_inst_id(inst_id)
+        if not symbol:
+            return None
+        oi_contracts = self._float_value(item.get("oi"))
+        oi_usd = self._float_value(item.get("oiUsd"))
+        if oi_usd <= 0:
+            oi_ccy = self._float_value(item.get("oiCcy"))
+            price = tickers.get(symbol).price if tickers and symbol in tickers else 0.0
+            oi_usd = oi_ccy * price if oi_ccy > 0 and price > 0 else oi_contracts * price
+        return OKXOIInfo(
+            symbol=symbol,
+            inst_id=inst_id,
+            oi_contracts=oi_contracts,
+            oi_value_usd=oi_usd,
+        )
+
+    async def _gather_limited(self, symbols: List[str], fetcher) -> list:
+        return await asyncio.gather(*[fetcher(sym) for sym in symbols], return_exceptions=True)
 
     @staticmethod
     def normalize_symbol(symbol: str) -> str:
@@ -305,28 +377,16 @@ class OKXCollector:
         data = payload.get("data", []) if isinstance(payload, dict) else []
         if not data:
             return None
-        item = data[0]
-        try:
-            oi_contracts = float(item.get("oi") or 0)
-            oi_ccy = float(item.get("oiCcy") or 0)
-            ticker = (await self.get_all_swap_tickers()).get(symbol)
-            price = ticker.price if ticker else 0.0
-            oi_value = oi_ccy * price if oi_ccy > 0 and price > 0 else oi_contracts * price
-            info = OKXOIInfo(
-                symbol=symbol,
-                inst_id=inst_id,
-                oi_contracts=oi_contracts,
-                oi_value_usd=oi_value,
-            )
+        tickers = await self.get_all_swap_tickers()
+        info = self._parse_open_interest_item(data[0], tickers)
+        if info:
             self._oi_cache[cache_key] = info
             return info
-        except Exception:
-            return None
+        return None
 
     async def get_all_funding_rates(self, symbols: Optional[List[str]] = None) -> Dict[str, OKXFundingInfo]:
         symbols = symbols or await self.get_swap_symbols()
-        tasks = [self.get_funding_rate(sym) for sym in symbols]
-        rows = await asyncio.gather(*tasks, return_exceptions=True)
+        rows = await self._gather_limited(symbols, self.get_funding_rate)
         results: Dict[str, OKXFundingInfo] = {}
         for row in rows:
             if isinstance(row, OKXFundingInfo):
@@ -334,11 +394,36 @@ class OKXCollector:
         return results
 
     async def get_all_open_interest(self, symbols: Optional[List[str]] = None) -> Dict[str, OKXOIInfo]:
-        symbols = symbols or await self.get_swap_symbols()
-        tasks = [self.get_open_interest(sym) for sym in symbols]
-        rows = await asyncio.gather(*tasks, return_exceptions=True)
         results: Dict[str, OKXOIInfo] = {}
-        for row in rows:
-            if isinstance(row, OKXOIInfo):
-                results[row.symbol] = row
+        symbols = [self.normalize_symbol(sym) for sym in (symbols or await self.get_swap_symbols())]
+        wanted = set(symbols)
+
+        for symbol in symbols:
+            cache_key = f"oi:{symbol}"
+            if cache_key in self._oi_cache:
+                results[symbol] = self._oi_cache[cache_key]
+
+        missing = wanted - set(results)
+        if not missing:
+            return results
+
+        payload = await self._request("/api/v5/public/open-interest", {"instType": "SWAP"})
+        data = payload.get("data", []) if isinstance(payload, dict) else []
+        if data:
+            tickers = await self.get_all_swap_tickers()
+            for item in data:
+                info = self._parse_open_interest_item(item, tickers)
+                if not info or info.symbol not in wanted:
+                    continue
+                results[info.symbol] = info
+                self._oi_cache[f"oi:{info.symbol}"] = info
+            return results
+
+        # Bulk endpoint failure should not trigger a full-market request storm.
+        # Single-coin and small fixed-universe callers still get a bounded fallback.
+        if len(missing) <= self.BULK_FALLBACK_SYMBOL_LIMIT:
+            rows = await self._gather_limited(sorted(missing), self.get_open_interest)
+            for row in rows:
+                if isinstance(row, OKXOIInfo):
+                    results[row.symbol] = row
         return results

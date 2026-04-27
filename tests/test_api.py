@@ -302,6 +302,46 @@ class TestAI500Response:
         assert response.data["count"] == 1
 
 
+class TestAI500StatsEndpoint:
+    """测试 AI500 stats 路由不会被 /api/ai500/{symbol} 截获"""
+
+    @pytest.fixture
+    def client(self):
+        return TestClient(app)
+
+    def test_ai500_stats_route_matches_before_symbol_route(self, client):
+        analysis = CoinAnalysis(
+            symbol="BTCUSDT",
+            direction=Direction.LONG,
+            score=80.0,
+            confidence=70.0,
+        )
+        analyzer = MagicMock()
+        analyzer.analyze_all = AsyncMock(return_value={"BTCUSDT": analysis})
+        analyzer.set_cmc_data = MagicMock()
+
+        cmc_collector = MagicMock()
+        cmc_collector.get_trending = AsyncMock(return_value=[])
+        cmc_collector.get_gainers_losers = AsyncMock(return_value=([], []))
+        cmc_collector.get_latest_listings = AsyncMock(return_value={})
+
+        app.dependency_overrides[get_analyzer] = lambda: analyzer
+        app.dependency_overrides[get_cmc_collector] = lambda: cmc_collector
+
+        try:
+            response = client.get(
+                "/api/ai500/stats",
+                headers={"X-API-Key": settings.auth_key},
+            )
+        finally:
+            app.dependency_overrides.clear()
+
+        assert response.status_code == 200
+        data = response.json()["data"]
+        assert data["universe_count"] == 1
+        assert data["active_count"] == 1
+
+
 class TestOIRankingResponse:
     """测试 OI 排行响应模型"""
 
