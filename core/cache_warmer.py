@@ -5,7 +5,7 @@
 
 定时预热机制:
 - 每 5 分钟调度一次，在每小时的 00、05、10 ... 55 分的第 30 秒触发
-- 预热接口: /api/ai500/list, /api/oi/top, /api/coin/{symbol}
+- 预热接口: /api/ai500/list, /api/oi/top, /api/price/ranking, /api/coin/{symbol}
 
 预热币种:
 - /api/ai500/list 前 20 的币种
@@ -204,6 +204,7 @@ class CacheWarmer:
             "ai500_long": False,
             "oi_top": False,
             "oi_low": False,
+            "price_rankings": {},
             "coins": [],
             "errors": [],
             "duration_ms": 0
@@ -253,7 +254,16 @@ class CacheWarmer:
             else:
                 result["errors"].append("oi/low 预热失败")
 
-            # 3. 预热币种数据（覆盖所有分析通过的币种）
+            # 3. 预热价格排行，避免 API 请求触发冷缓存实时计算
+            price_results = await self._warmup_price_rankings()
+            result["price_rankings"] = price_results
+            for duration_key, ok in price_results.items():
+                if ok:
+                    logger.info("✓ price/ranking 预热成功: %s", duration_key)
+                else:
+                    result["errors"].append(f"price/ranking {duration_key} 预热失败")
+
+            # 4. 预热币种数据（覆盖所有分析通过的币种）
             coins_to_warmup = await self._get_coins_to_warmup(all_analyzed_symbols)
             warmed_coins = await self._warmup_coins(coins_to_warmup)
             result["coins"] = warmed_coins
@@ -274,6 +284,29 @@ class CacheWarmer:
         logger.info("=" * 50)
 
         return result
+
+    async def _warmup_price_rankings(self) -> Dict[str, bool]:
+        """预计算价格排行并写入 API 缓存，API 层只读缓存。"""
+        results: Dict[str, bool] = {}
+        for duration_key in ("1h", "4h", "24h"):
+            try:
+                rows = await self.collector.get_price_ranking(duration=duration_key, limit=20)
+                payload = {
+                    "success": True,
+                    "data": {
+                        "rows": rows,
+                        "count": len(rows),
+                        "duration": duration_key,
+                        "timestamp": int(time.time()),
+                    },
+                }
+                cache_key = f"{APICache.KEY_PRICE_RANKING_PREFIX}{duration_key}"
+                self.cache.set(cache_key, payload, ttl=self.cache_ttl)
+                results[duration_key] = True
+            except Exception as exc:
+                logger.warning("price/ranking 预热失败: duration=%s, error=%s", duration_key, exc)
+                results[duration_key] = False
+        return results
 
     def _analysis_to_coin_dict(self, c) -> dict:
         """将分析结果转换为字典

@@ -240,6 +240,55 @@ class TestMarketDataEndpoints:
 
         assert response.status_code == 200
 
+    def test_price_ranking_cache_miss_returns_warming_up_without_recompute(self, client):
+        mock_collector = MagicMock()
+        mock_collector.get_price_ranking = AsyncMock(return_value=[{"symbol": "BTCUSDT"}])
+        mock_cache = MagicMock()
+        mock_cache.get_with_state.return_value = (None, "miss")
+
+        app.dependency_overrides[get_collector] = lambda: mock_collector
+        try:
+            with patch("app.routers.market_data.get_cache", return_value=mock_cache):
+                response = client.get(
+                    "/api/price/ranking?duration=1h&limit=20",
+                    headers={"X-API-Key": settings.auth_key},
+                )
+        finally:
+            app.dependency_overrides.clear()
+
+        assert response.status_code == 503
+        assert response.json()["detail"] == "price_ranking_warming_up"
+        mock_collector.get_price_ranking.assert_not_called()
+
+    def test_price_ranking_returns_stale_cache_without_recompute(self, client):
+        mock_collector = MagicMock()
+        mock_collector.get_price_ranking = AsyncMock(return_value=[{"symbol": "ETHUSDT"}])
+        cached = {
+            "success": True,
+            "data": {
+                "rows": [{"symbol": "BTCUSDT"}],
+                "count": 1,
+                "duration": "1h",
+                "timestamp": 1712000000,
+            },
+        }
+        mock_cache = MagicMock()
+        mock_cache.get_with_state.return_value = (cached, "stale")
+
+        app.dependency_overrides[get_collector] = lambda: mock_collector
+        try:
+            with patch("app.routers.market_data.get_cache", return_value=mock_cache):
+                response = client.get(
+                    "/api/price/ranking?duration=1h&limit=20",
+                    headers={"X-API-Key": settings.auth_key},
+                )
+        finally:
+            app.dependency_overrides.clear()
+
+        assert response.status_code == 200
+        assert response.json()["data"]["rows"] == [{"symbol": "BTCUSDT"}]
+        mock_collector.get_price_ranking.assert_not_called()
+
 
 class TestResponseModels:
     """测试响应模型"""

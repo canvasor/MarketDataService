@@ -133,21 +133,10 @@ async def get_price_ranking(
 ):
     cache = get_cache()
     cache_key = f"{APICache.KEY_PRICE_RANKING_PREFIX}{duration}"
-    cached = cache.get(cache_key)
+    cached, _ = cache.get_with_state(cache_key)
     if cached:
         return cached
-    rows = await collector.get_price_ranking(duration=duration, limit=limit)
-    result = {
-        "success": True,
-        "data": {
-            "rows": rows,
-            "count": len(rows),
-            "duration": duration,
-            "timestamp": int(time.time()),
-        },
-    }
-    cache.set(cache_key, result, ttl=settings.cache_ttl_ranking)
-    return result
+    raise HTTPException(status_code=503, detail="price_ranking_warming_up")
 
 
 @router.get("/api/funding-rate/top")

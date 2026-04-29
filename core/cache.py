@@ -130,6 +130,23 @@ class APICache:
             self._stats["hits"] += 1
             return entry.data
 
+    def get_with_state(self, key: str) -> tuple[Optional[Any], str]:
+        """
+        获取缓存数据并返回状态。
+
+        与 get() 不同，过期数据不会被删除，会以 stale 状态返回，供关键接口做旧缓存兜底。
+        """
+        with self._lock:
+            entry = self._cache.get(key)
+            if entry is None:
+                self._stats["misses"] += 1
+                return None, "miss"
+
+            self._stats["hits"] += 1
+            if entry.is_expired():
+                return entry.data, "stale"
+            return entry.data, "fresh"
+
     def set(self, key: str, data: Any, ttl: Optional[float] = None) -> None:
         """
         设置缓存数据

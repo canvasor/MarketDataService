@@ -44,6 +44,12 @@ class UnifiedMarketCollector(BinanceCollector):
         "5d": ("4h", 30),
         "7d": ("1d", 7),
     }
+    PRICE_CHANGE_INTERVALS = {
+        "1h": ("1h", 2),
+        "4h": ("4h", 2),
+        "24h": ("1d", 2),
+    }
+    PRICE_RANKING_CONCURRENCY = 15
 
     def __init__(
         self,
@@ -450,29 +456,57 @@ class UnifiedMarketCollector(BinanceCollector):
 
         tickers = await self.get_all_tickers()
         candidates = sorted(tickers.values(), key=lambda x: x.volume_24h, reverse=True)[: self.PRICE_RANKING_CANDIDATES]
+        all_oi = await self.get_all_oi()
+        semaphore = asyncio.Semaphore(self.PRICE_RANKING_CONCURRENCY)
 
         async def _build_row(ticker: TickerData) -> Optional[dict]:
-            changes = await self.calculate_all_price_changes(ticker.symbol, ticker.price)
-            flow = await self.get_flow_proxy(ticker.symbol, duration=duration, trade="all")
-            oi = (await self.get_all_oi()).get(ticker.symbol)
-            pct = changes.get(duration, 0.0)
-            return {
-                "symbol": ticker.symbol,
-                "price": ticker.price,
-                "price_delta": pct / 100,
-                "future_flow": flow.get("future_flow", 0.0),
-                "spot_flow": flow.get("spot_flow", 0.0),
-                "oi": oi.oi_coins if oi else 0.0,
-                "oi_delta": (oi.oi_coins * oi.oi_change_1h / 100) if oi else 0.0,
-                "oi_delta_value": oi.oi_delta_value_1h if oi else 0.0,
-                "mode": flow.get("mode"),
-            }
+            async with semaphore:
+                try:
+                    pct, flow = await asyncio.gather(
+                        self._calculate_price_change_for_duration(
+                            ticker.symbol,
+                            ticker.price,
+                            duration,
+                        ),
+                        self.get_flow_proxy(ticker.symbol, duration=duration, trade="all"),
+                    )
+                    oi = all_oi.get(ticker.symbol)
+                    return {
+                        "symbol": ticker.symbol,
+                        "price": ticker.price,
+                        "price_delta": pct / 100,
+                        "future_flow": flow.get("future_flow", 0.0),
+                        "spot_flow": flow.get("spot_flow", 0.0),
+                        "oi": oi.oi_coins if oi else 0.0,
+                        "oi_delta": (oi.oi_coins * oi.oi_change_1h / 100) if oi else 0.0,
+                        "oi_delta_value": oi.oi_delta_value_1h if oi else 0.0,
+                        "mode": flow.get("mode"),
+                    }
+                except Exception as exc:
+                    logger.debug("price ranking row skipped for %s: %s", ticker.symbol, exc)
+                    return None
 
         rows = [r for r in await asyncio.gather(*[_build_row(t) for t in candidates]) if r]
         rows.sort(key=lambda x: x["price_delta"], reverse=True)
         result = rows[:limit]
         self._price_ranking_cache[cache_key] = result
         return result
+
+    async def _calculate_price_change_for_duration(
+        self,
+        symbol: str,
+        current_price: float,
+        duration: str,
+    ) -> float:
+        """只计算请求周期的涨跌幅，避免 price/ranking 冷缓存拉取所有周期 K 线。"""
+        interval, kline_limit = self.PRICE_CHANGE_INTERVALS.get(duration, ("1h", 2))
+        klines = await self.get_symbol_klines(symbol, interval=interval, limit=kline_limit)
+        if not klines or len(klines) < 2:
+            return 0.0
+        prev_close = float(klines[-2].get("close") or 0.0)
+        if prev_close <= 0:
+            return 0.0
+        return ((current_price - prev_close) / prev_close) * 100
 
     async def get_funding_rate_ranking(self, rank_type: str = "top", limit: int = 20) -> List[dict]:
         rates = list((await self.get_all_funding_rates()).values())

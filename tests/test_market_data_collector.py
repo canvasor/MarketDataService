@@ -71,6 +71,33 @@ class TestUnifiedMarketCollector:
         assert result["amount"] == 300.0
         assert result["mode"] == "proxy_taker_imbalance"
 
+    @pytest.mark.asyncio
+    async def test_get_price_ranking_uses_requested_duration_and_single_oi_fetch(self, collector):
+        collector.PRICE_RANKING_CANDIDATES = 2
+        collector.get_all_tickers = AsyncMock(return_value={
+            "BTCUSDT": TickerData(symbol="BTCUSDT", price=100.0, volume_24h=10_000_000.0),
+            "ETHUSDT": TickerData(symbol="ETHUSDT", price=50.0, volume_24h=9_000_000.0),
+        })
+        collector.get_all_oi = AsyncMock(return_value={
+            "BTCUSDT": OIData(symbol="BTCUSDT", oi_value=1_000_000.0, oi_coins=1000.0, oi_change_1h=2.0, oi_delta_value_1h=20_000.0),
+            "ETHUSDT": OIData(symbol="ETHUSDT", oi_value=800_000.0, oi_coins=900.0, oi_change_1h=1.0, oi_delta_value_1h=8_000.0),
+        })
+        collector.calculate_all_price_changes = AsyncMock(return_value={"1h": 99.0})
+        collector._calculate_price_change_for_duration = AsyncMock(side_effect=[5.0, 3.0])
+        collector.get_flow_proxy = AsyncMock(return_value={
+            "future_flow": 100.0,
+            "spot_flow": 50.0,
+            "mode": "proxy_taker_imbalance",
+        })
+
+        rows = await collector.get_price_ranking(duration="1h", limit=2)
+
+        assert [row["symbol"] for row in rows] == ["BTCUSDT", "ETHUSDT"]
+        collector.calculate_all_price_changes.assert_not_called()
+        collector.get_all_oi.assert_awaited_once()
+        collector._calculate_price_change_for_duration.assert_any_await("BTCUSDT", 100.0, "1h")
+        collector._calculate_price_change_for_duration.assert_any_await("ETHUSDT", 50.0, "1h")
+
 
     @pytest.mark.asyncio
     async def test_get_all_tickers_merges_okx(self, collector, monkeypatch):

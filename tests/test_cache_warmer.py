@@ -42,3 +42,35 @@ async def test_cache_warmer_start_does_not_block_on_initial_warmup(monkeypatch):
     assert not finished.is_set()
 
     await warmer.stop()
+
+
+@pytest.mark.asyncio
+async def test_cache_warmer_precomputes_price_rankings():
+    class FakeCache:
+        def __init__(self):
+            self.values = {}
+
+        def set(self, key, data, ttl=None):
+            self.values[key] = data
+
+        def record_warmup(self, timestamp):
+            self.last_warmup = timestamp
+
+    class FakeCollector:
+        def __init__(self):
+            self._oi_cache = {}
+            self.calls = []
+
+        async def get_price_ranking(self, duration="1h", limit=20):
+            self.calls.append((duration, limit))
+            return [{"symbol": f"BTC{duration}", "price_delta": 0.01}]
+
+    collector = FakeCollector()
+    cache = FakeCache()
+    warmer = CacheWarmer(collector=collector, analyzer=None, cache=cache)
+
+    result = await warmer._warmup_price_rankings()
+
+    assert result == {"1h": True, "4h": True, "24h": True}
+    assert collector.calls == [("1h", 20), ("4h", 20), ("24h", 20)]
+    assert set(cache.values) >= {"price_1h", "price_4h", "price_24h"}
