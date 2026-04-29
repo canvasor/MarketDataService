@@ -38,6 +38,21 @@ class TestUnifiedMarketCollector:
         finally:
             mod.time.time = old_time
 
+    def test_save_snapshot_state_keeps_existing_file_when_write_fails(self, tmp_path):
+        snapshot_file = tmp_path / "provider_snapshots.json"
+        snapshot_file.write_text('{"BTCUSDT": [{"ts": 1, "price": 100.0}]}', encoding="utf-8")
+        collector = UnifiedMarketCollector(snapshot_file=str(snapshot_file))
+        collector._snapshot_state = {"ETHUSDT": [{"ts": 2, "price": 200.0}]}
+
+        def broken_dump(_data, fh, **_kwargs):
+            fh.write('{"ETHUSDT":')
+            raise RuntimeError("disk write interrupted")
+
+        with patch("collectors.market_data_collector.json.dump", side_effect=broken_dump):
+            collector._save_snapshot_state()
+
+        assert snapshot_file.read_text(encoding="utf-8") == '{"BTCUSDT": [{"ts": 1, "price": 100.0}]}'
+
     @pytest.mark.asyncio
     async def test_get_exchange_oi_details_binance(self, collector, monkeypatch):
         monkeypatch.setattr('collectors.binance_collector.BinanceCollector.get_usdt_symbols', AsyncMock(return_value=["ETHUSDT"]))

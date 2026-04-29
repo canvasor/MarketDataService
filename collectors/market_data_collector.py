@@ -110,11 +110,20 @@ class UnifiedMarketCollector(BinanceCollector):
     def _save_snapshot_state(self) -> None:
         if not self.snapshot_file:
             return
+        tmp_file = f"{self.snapshot_file}.tmp"
         try:
-            os.makedirs(os.path.dirname(self.snapshot_file), exist_ok=True)
-            with open(self.snapshot_file, "w", encoding="utf-8") as fh:
+            snapshot_dir = os.path.dirname(self.snapshot_file)
+            if snapshot_dir:
+                os.makedirs(snapshot_dir, exist_ok=True)
+            with open(tmp_file, "w", encoding="utf-8") as fh:
                 json.dump(self._snapshot_state, fh, ensure_ascii=False)
+            os.replace(tmp_file, self.snapshot_file)
         except Exception as exc:
+            try:
+                if os.path.exists(tmp_file):
+                    os.remove(tmp_file)
+            except OSError:
+                pass
             logger.warning("保存快照状态失败: %s", exc)
 
     def _mark_provider_success(self, provider: str) -> None:
